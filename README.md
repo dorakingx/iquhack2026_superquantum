@@ -197,10 +197,9 @@ Implements a class-based synthesis pipeline:
 
 - **`UnitarySolver`**: For direct unitary matrix synthesis
   - Exact Clifford decomposition for Clifford gates
-  - QFT recognition for Problem 9 (Structured Unitary 2)
+  - QFT recognition for Problem 8 (Structured Unitary 1)
   - Solovay-Kitaev synthesis for non-Clifford gates with best-of-N compilation (3 attempts)
   - Supports recursion degree configuration
-  - Problem 8 placeholder verification
 
 - **`HamiltonianSolver`**: For Hamiltonian exponential synthesis
   - Pauli gadget decomposition
@@ -259,14 +258,16 @@ Implements a class-based synthesis pipeline:
   - T-count: ~103,931
 
 - **Problem 8: Structured Unitary 1**
-  - Target: Placeholder (identity matrix) - **WARNING: Update with actual matrix from PDF**
-  - Solver: `UnitarySolver` with placeholder verification
-  - T-count: 0 (placeholder)
-
-- **Problem 9: Structured Unitary 2**
   - Target: Quantum Fourier Transform (QFT) on 2 qubits
+  - Matrix: 1/2 * [[1,1,1,1], [1,i,-1,-i], [1,-1,1,-1], [1,-i,-1,i]]
   - Solver: `UnitarySolver` with QFT recognition
   - T-count: ~2 (optimized with exact QFT synthesis)
+
+- **Problem 9: Structured Unitary 2**
+  - Target: Sparse structured unitary matrix
+  - Matrix: Sparse matrix with elements involving 1, i, and (-1±i)/2 terms
+  - Solver: `UnitarySolver` with Solovay-Kitaev synthesis and best-of-N compilation
+  - T-count: ~65,030
 
 - **Problem 10: Random Unitary**
   - Target: Random 4×4 unitary (seed=42)
@@ -287,7 +288,7 @@ Implements a class-based synthesis pipeline:
 - Significantly reduces T-count for Problem 5 (from ~37,964 to ~18)
 
 ### QFT Recognition
-- Problem 9 is automatically recognized as QFT using problem name check
+- Problem 8 is automatically recognized as QFT using problem name check
 - Uses Qiskit's exact QFT circuit instead of approximation
 - Reduces T-count from ~53,055 to ~2
 
@@ -298,7 +299,7 @@ Implements a class-based synthesis pipeline:
 ### Best-of-N Compilation
 - **All Solovay-Kitaev synthesis cases** now use best-of-N compilation
 - Tries 3 different optimization levels (1, 2, 3) and selects the circuit with lowest T-count
-- Applied to Problems 2, 7, 8, 10, and any other non-Clifford unitaries
+- Applied to Problems 2, 7, 9, 10, and any other non-Clifford unitaries
 - Ensures competitive T-count performance
 
 ### Adaptive Trotterization

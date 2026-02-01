@@ -295,11 +295,6 @@ class UnitarySolver(ChallengeSolver):
         2. Check if unitary is Clifford → use exact decomposition
         3. Otherwise → use Solovay-Kitaev approximation
         """
-        # CRITICAL: Check if Problem 8 is still using identity placeholder
-        if np.allclose(self.target_unitary, np.eye(self.target_unitary.shape[0]), atol=1e-10):
-            if "Problem 8" in self.problem_name or "Structured Unitary 1" in self.problem_name:
-                print("CRITICAL WARNING: Problem 8 is still Identity! You will score 0 for this problem.")
-        
         # Determine number of qubits from unitary dimension
         dim = self.target_unitary.shape[0]
         num_qubits = int(np.log2(dim))
@@ -307,8 +302,8 @@ class UnitarySolver(ChallengeSolver):
         if 2**num_qubits != dim:
             raise ValueError(f"Unitary dimension {dim} is not a power of 2")
         
-        # Check if this is Problem 9 (Structured Unitary 2) - use QFT synthesis
-        if "Structured Unitary 2" in self.problem_name or "Problem 9" in self.problem_name:
+        # Check if this is Problem 8 (Structured Unitary 1) - use QFT synthesis
+        if "Structured Unitary 1" in self.problem_name or "Problem 8" in self.problem_name:
             # Use exact QFT synthesis
             self.circuit = self._synthesize_qft_exact(num_qubits)
             return
@@ -1323,25 +1318,38 @@ def create_hamiltonian_config_6():
 
 
 def create_problem_8_unitary():
-    print("WARNING: Problem 8 is placeholder (Identity). Update with actual matrix from PDF!")
-    return np.eye(4, dtype=complex)
-
-
-def create_problem_9_unitary():
     """
-    Create unitary matrix for Problem 9 (Structured Unitary 2).
-    
-    Matrix from challenge documentation:
-    0.5 * [[1,1,1,1], [1,i,-1,-i], [1,-1,1,-1], [1,-i,-1,i]]
-    
-    Returns:
-        np.ndarray: 4×4 complex matrix
+    Problem 8: Structured Unitary 1 (QFT Matrix)
+    From PDF: 1/2 * [[1,1,1,1], [1,i,-1,-i], [1,-1,1,-1], [1,-i,-1,i]]
     """
     return 0.5 * np.array([
         [1, 1, 1, 1],
         [1, 1j, -1, -1j],
         [1, -1, 1, -1],
         [1, -1j, -1, 1j]
+    ], dtype=complex)
+
+
+def create_problem_9_unitary():
+    """
+    Problem 9: Structured Unitary 2
+    From PDF: Rows involve 1, i, and (-1±i)/2 terms.
+    Row 0: [1, 0, 0, 0]
+    Row 1: [0, 0, (-1+i)/2, (1+i)/2]
+    Row 2: [0, i, 0, 0]
+    Row 3: [0, 0, (-1+i)/2, (-1-i)/2]
+    """
+    # Derived from PDF text extraction
+    alpha = (-1 + 1j) / 2
+    beta  = (1 + 1j) / 2
+    gamma = (-1 + 1j) / 2
+    delta = (-1 - 1j) / 2
+    
+    return np.array([
+        [1, 0, 0, 0],
+        [0, 0, alpha, beta],
+        [0, 1j, 0, 0],
+        [0, 0, gamma, delta]
     ], dtype=complex)
 
 
