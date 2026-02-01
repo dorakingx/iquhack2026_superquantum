@@ -605,90 +605,50 @@ class UnitarySolver(ChallengeSolver):
 class StatePrepSolver(UnitarySolver):
     """
     Solver for state preparation problems.
-    
-    Used for Problem 7 where we need to design a unitary that maps |00⟩ to a target statevector.
-    Inherits synthesis logic from UnitarySolver.
+    Inherits from UnitarySolver to reuse decomposition and synthesis logic.
     """
     
     def __init__(self, seed, problem_name):
         """
-        Initialize StatePrepSolver with a seed for random statevector generation.
-        
-        Args:
-            seed (int): Random seed for generating target statevector
-            problem_name (str): Name/description of the problem
+        Initialize StatePrepSolver with a seed.
         """
         from qiskit.quantum_info import random_statevector
         
         # Generate target statevector
         self.target_statevector = random_statevector(4, seed=seed)
-        
-        # Construct unitary that maps |00⟩ to target statevector
-        # We need a unitary U such that U|00⟩ = |ψ⟩
-        # Use QR decomposition: start with |ψ⟩ as first column, complete basis
-        
         psi = self.target_statevector.data
         
-        # Create a matrix with |ψ⟩ as first column
+        # Construct unitary that maps |00⟩ to |ψ⟩ using QR decomposition
         basis_matrix = np.zeros((4, 4), dtype=complex)
         basis_matrix[:, 0] = psi
         
-        # Complete the basis with orthogonal vectors
-        # Use Gram-Schmidt: start with standard basis vectors
+        # Gram-Schmidt to complete the basis
         standard_basis = np.eye(4, dtype=complex)
-        
-        # Project out |ψ⟩ component from each standard basis vector
         for i in range(1, 4):
             v = standard_basis[:, i]
-            # Project out components already in basis
             for j in range(i):
                 v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
-            # Normalize
             norm = np.linalg.norm(v)
             if norm > 1e-10:
                 basis_matrix[:, i] = v / norm
             else:
-                # If vector is too small, use next standard basis vector
-                # and project out |ψ⟩
-                v = standard_basis[:, (i + 1) % 4]
-                v = v - np.vdot(psi, v) * psi
-                norm = np.linalg.norm(v)
-                if norm > 1e-10:
-                    basis_matrix[:, i] = v / norm
-                else:
-                    # Fallback: use random vector
-                    v = np.random.randn(4) + 1j * np.random.randn(4)
-                    for j in range(i):
-                        v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
-                    norm = np.linalg.norm(v)
-                    if norm > 1e-10:
-                        basis_matrix[:, i] = v / norm
+                # Handle linear dependence
+                v = np.random.randn(4) + 1j * np.random.randn(4)
+                for j in range(i):
+                    v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
+                basis_matrix[:, i] = v / np.linalg.norm(v)
         
-        # Ensure orthonormality using QR decomposition
-        Q, R = np.linalg.qr(basis_matrix)
+        # QR decomposition to ensure unitarity
+        Q, _ = np.linalg.qr(basis_matrix)
         
-        # Ensure first column matches |ψ⟩ (up to global phase)
-        # Adjust phase
+        # Adjust phase of first column to match psi
         phase_diff = np.angle(np.vdot(psi, Q[:, 0]))
         Q[:, 0] = Q[:, 0] * np.exp(-1j * phase_diff)
         
-        # Verify first column matches
-        if not np.allclose(Q[:, 0], psi, atol=1e-10):
-            # If not matching, try adjusting the entire matrix
-            # Find the column closest to |ψ⟩
-            overlaps = [abs(np.vdot(psi, Q[:, i])) for i in range(4)]
-            best_col = np.argmax(overlaps)
-            if best_col != 0:
-                # Swap columns
-                Q[:, [0, best_col]] = Q[:, [best_col, 0]]
-        
-        target_unitary = Q
-        
-        # Initialize UnitarySolver with extracted unitary
-        super().__init__(target_unitary, problem_name, recursion_degree=2)
-        
-        # Store seed for reference
-        self.seed = seed
+        # Initialize UnitarySolver (parent) with the constructed unitary
+        super().__init__(Q, problem_name)
+
+    # Note: NO synthesize method here. We inherit it from UnitarySolver.
 
 
 class DiagonalSolver(ChallengeSolver):
@@ -1289,17 +1249,11 @@ def create_hamiltonian_config_3():
 
 
 def create_hamiltonian_config_4():
-    """
-    Create Hamiltonian configuration for Problem 4: exp(i*π/7 * (XX + YY))
-    
-    Returns:
-        dict: Hamiltonian configuration
-    """
     return {
         'pauli_terms': ['XX', 'YY'],
-        'angle': np.pi / 7,  # π/7 as specified in challenge documentation
+        'angle': np.pi / 7,
         'num_qubits': 2,
-        'trotter_steps': 1  # Commuting terms
+        'trotter_steps': 1
     }
 
 
@@ -1321,35 +1275,16 @@ def create_hamiltonian_config_5():
 
 
 def create_hamiltonian_config_6():
-    """
-    Create Hamiltonian configuration for Problem 6: exp(i*π/7 * (XX + ZI + IZ))
-    
-    Uses Trotterization since XX doesn't commute with ZI/IZ.
-    
-    Returns:
-        dict: Hamiltonian configuration
-    """
     return {
         'pauli_terms': ['XX', 'ZI', 'IZ'],
-        'angle': np.pi / 7,  # π/7 as specified in challenge documentation
+        'angle': np.pi / 7,
         'num_qubits': 2,
-        'trotter_steps': 4  # Trotterization for non-commuting terms
+        'trotter_steps': 4
     }
 
 
 def create_problem_8_unitary():
-    """
-    Create unitary matrix for Problem 8 (Structured Unitary 1).
-    
-    TODO: Update this function with the actual matrix from the challenge PDF.
-    Currently returns a placeholder (identity matrix).
-    
-    Returns:
-        np.ndarray: 4×4 complex matrix (placeholder)
-    """
-    print("WARNING: Problem 8 uses placeholder matrix (identity). "
-          "Please update create_problem_8_unitary() with the actual matrix from the challenge PDF.")
-    # TODO: Replace np.eye(4) with the actual matrix from challenge PDF
+    print("WARNING: Problem 8 is using identity matrix placeholder! Update with actual matrix.")
     return np.eye(4, dtype=complex)
 
 
