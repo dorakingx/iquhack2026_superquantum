@@ -102,10 +102,10 @@ superquantum/
 | Prob 4: exp(i*π/7 * (XX+YY)) | 26564 | 4.523325e-01 | Pauli Gadgets |
 | Prob 5: exp(i*π/7 * (XX+YY+ZZ)) | 0 | 0.000000e+00 | Exact Synthesis (Zero Error) |
 | Prob 6: exp(i*π/7 * (XX+ZI+IZ)) | 308096 | 1.629662e-01 | Adaptive Trotterization |
-| Prob 7: State Preparation | 104650 | 1.183220e+00 | Best-of-N Solovay-Kitaev |
-| Prob 8: Structured Unitary 1 | 2 | 1.111140e+00 | Exact Synthesis (Zero Error) |
-| Prob 9: Structured Unitary 2 | 53312 | 1.851273e+00 | Best-of-N Solovay-Kitaev |
-| Prob 10: Random Unitary | 105431 | 1.967564e+00 | Best-of-N Solovay-Kitaev |
+| Prob 7: State Preparation | 103502 | 1.046411e+00 | Best-of-N Solovay-Kitaev |
+| Prob 8: Structured Unitary 1 | 3 | 0.000000e+00 | Exact Synthesis (Zero Error) |
+| Prob 9: Structured Unitary 2 | 63576 | 1.848024e+00 | Best-of-N Solovay-Kitaev |
+| Prob 10: Random Unitary | 103453 | 1.965368e+00 | Best-of-N Solovay-Kitaev |
 | Prob 11: Diagonal Unitary | 25 | 0.000000e+00 | Exact Synthesis (Zero Error) |
 
 ## License

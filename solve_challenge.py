@@ -364,13 +364,10 @@ class UnitarySolver(ChallengeSolver):
         qft_with_swaps = QFT(num_qubits, do_swaps=True)
         qft_without_swaps = QFT(num_qubits, do_swaps=False)
         
-        # Decompose both to get accurate distance comparison
-        decomposed_with = qft_with_swaps.decompose(reps=2)
-        decomposed_without = qft_without_swaps.decompose(reps=2)
-        
-        # Calculate distances for both against target unitary
-        dist_with = operator_norm_distance(self.target_unitary, decomposed_with, optimize_phase=True)
-        dist_without = operator_norm_distance(self.target_unitary, decomposed_without, optimize_phase=True)
+        # Calculate distances for both RAW circuits (before decomposition)
+        # This avoids approximation errors from decomposition
+        dist_with = operator_norm_distance(self.target_unitary, qft_with_swaps, optimize_phase=True)
+        dist_without = operator_norm_distance(self.target_unitary, qft_without_swaps, optimize_phase=True)
         
         # Select the one with lower distance
         if dist_with < dist_without:
@@ -392,8 +389,20 @@ class UnitarySolver(ChallengeSolver):
         # Convert S/Z gates to T gates
         circuit_with_t = convert_s_z_to_t(transpiled)
         
+        # For QFT, verify distance is still good before optimization
+        # If distance is already near perfect, skip aggressive optimization to preserve accuracy
+        pre_opt_distance = operator_norm_distance(self.target_unitary, circuit_with_t, optimize_phase=True)
+        if pre_opt_distance < 1e-10:
+            # Distance is already perfect, return without optimization
+            return circuit_with_t
+        
         # Apply optimization
         optimized = self._optimize_circuit(circuit_with_t)
+        
+        # Verify optimization didn't introduce errors
+        post_opt_distance = operator_norm_distance(self.target_unitary, optimized, optimize_phase=True)
+        if post_opt_distance > pre_opt_distance * 1.1:  # If optimization made it worse, use original
+            return circuit_with_t
         
         return optimized
     
@@ -1627,10 +1636,10 @@ def main():
         ("Problem 4: exp(i*π/7 * (XX+YY))", None, HamiltonianSolver, create_hamiltonian_config_4()),
         ("Problem 5: exp(i*π/7 * (XX+YY+ZZ))", None, HamiltonianSolver, create_hamiltonian_config_5()),
         ("Problem 6: exp(i*π/7 * (XX+ZI+IZ))", None, HamiltonianSolver, create_hamiltonian_config_6()),
-        ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42, 'recursion_degree': 3}),
+        ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42, 'recursion_degree': 4}),
         ("Problem 8: Structured Unitary 1", create_problem_8_unitary(), UnitarySolver, None),
-        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, {'recursion_degree': 3}),
-        ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 3}),
+        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, {'recursion_degree': 4}),
+        ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 4}),
         ("Problem 11: Diagonal Unitary", None, DiagonalSolver, {'phases': phases_11}),
     ]
     
