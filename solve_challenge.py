@@ -602,12 +602,12 @@ class UnitarySolver(ChallengeSolver):
         return new_circuit
 
 
-class StatePrepSolver(ChallengeSolver):
+class StatePrepSolver(UnitarySolver):
     """
     Solver for state preparation problems.
     
     Used for Problem 7 where we need to design a unitary that maps |00⟩ to a target statevector.
-    Uses Initialize to extract the unitary, then delegates to UnitarySolver logic.
+    Inherits synthesis logic from UnitarySolver.
     """
     
     def __init__(self, seed, problem_name):
@@ -684,198 +684,11 @@ class StatePrepSolver(ChallengeSolver):
         
         target_unitary = Q
         
-        # Initialize base class with extracted unitary
-        super().__init__(target_unitary, problem_name)
+        # Initialize UnitarySolver with extracted unitary
+        super().__init__(target_unitary, problem_name, recursion_degree=2)
         
         # Store seed for reference
         self.seed = seed
-    
-    def synthesize(self):
-        """
-        Synthesize the state preparation unitary into a Clifford+T circuit.
-        
-        Delegates to UnitarySolver synthesis logic.
-        """
-    def _synthesize_qft_exact(self, num_qubits):
-        """
-        Synthesize QFT using exact Qiskit QFT circuit.
-        
-        Args:
-            num_qubits (int): Number of qubits
-        
-        Returns:
-            QuantumCircuit: Optimized circuit in ['h', 't', 'tdg', 'cx'] basis
-        """
-        from qiskit.circuit.library import QFT
-        
-        # Create QFT circuit
-        qft_circuit = QFT(num_qubits)
-        
-        # Decompose and transpile to target basis
-        # QFT contains CP gates which transpile well to T gates
-        decomposed = qft_circuit.decompose(reps=2)
-        
-        # Transpile to target basis
-        transpiled = transpile(
-            decomposed,
-            basis_gates=['h', 't', 'tdg', 'cx'],
-            optimization_level=2
-        )
-        
-        # Convert S/Z gates to T gates
-        circuit_with_t = convert_s_z_to_t(transpiled)
-        
-        # Apply optimization
-        optimized = self._optimize_circuit(circuit_with_t)
-        
-        return optimized
-    
-    def _synthesize_clifford_exact(self, num_qubits):
-        """Synthesize Clifford unitary using exact decomposition."""
-        circuit = decompose_clifford_exact(self.target_unitary, num_qubits)
-        optimized = self._optimize_circuit(circuit)
-        return optimized
-    
-    def _synthesize_solovay_kitaev(self, num_qubits):
-        """Synthesize non-Clifford unitary using Solovay-Kitaev decomposition."""
-        # Create circuit with the unitary
-        circuit = QuantumCircuit(num_qubits)
-        circuit.unitary(self.target_unitary, range(num_qubits), label='target')
-        
-        # Decompose the circuit completely
-        decomposed = circuit.decompose(reps=4)
-        
-        # Check if there are any unitary gates remaining
-        has_unitary = any(inst.operation.name == 'unitary' for inst in decomposed.data)
-        
-        if has_unitary:
-            # Force decomposition by transpiling to a basis that doesn't include unitary
-            unrolled = transpile(
-                decomposed,
-                basis_gates=['u3', 'cx'],
-                optimization_level=0
-            )
-            # Decompose again
-            unrolled = unrolled.decompose(reps=3)
-            # Check again
-            has_unitary = any(inst.operation.name == 'unitary' for inst in unrolled.data)
-            if has_unitary:
-                # Still has unitary gates - force remove them
-                new_circuit = QuantumCircuit(num_qubits)
-                for inst in unrolled.data:
-                    if inst.operation.name != 'unitary':
-                        qubits = [unrolled.find_bit(q)[0] for q in inst.qubits]
-                        new_circuit.append(inst.operation, qubits)
-                unrolled = new_circuit
-        else:
-            # Already decomposed, just transpile to u3 and cx
-            unrolled = transpile(
-                decomposed,
-                basis_gates=['u3', 'cx'],
-                optimization_level=0
-            )
-        
-        # Final check: ensure no unitary gates before SolovayKitaev
-        final_check = any(inst.operation.name == 'unitary' for inst in unrolled.data)
-        if final_check:
-            # Remove unitary gates completely
-            clean_circuit = QuantumCircuit(num_qubits)
-            for inst in unrolled.data:
-                if inst.operation.name != 'unitary':
-                    qubits = [unrolled.find_bit(q)[0] for q in inst.qubits]
-                    clean_circuit.append(inst.operation, qubits)
-            unrolled = clean_circuit
-        
-        # Apply Solovay-Kitaev explicitly
-        skd = SolovayKitaev(recursion_degree=2)
-        
-        # Create PassManager with SolovayKitaev
-        pm = PassManager([
-            UnrollCustomDefinitions(standard_gates, ['u3', 'cx']),
-            skd,
-        ])
-        
-        # Run the pass manager to apply SolovayKitaev
-        try:
-            sk_circuit = pm.run(unrolled)
-        except Exception as e:
-            # Fallback: if SolovayKitaev fails, use standard transpile
-            print(f"  Warning: SolovayKitaev pass failed ({str(e)[:50]}...), using standard transpile")
-            sk_circuit = transpile(
-                unrolled,
-                basis_gates=['h', 't', 'tdg', 'cx'],
-                optimization_level=2
-            )
-        
-        # Translate to target basis ['h', 't', 'tdg', 'cx']
-        sk_circuit = transpile(
-            sk_circuit,
-            basis_gates=['h', 't', 'tdg', 'cx'],
-            optimization_level=1
-        )
-        
-        # Convert any S/Z gates that might remain
-        sk_circuit = convert_s_z_to_t(sk_circuit)
-        
-        # Final optimization
-        optimized = self._optimize_circuit(sk_circuit)
-        
-        return optimized
-    
-    def _optimize_circuit(self, circuit):
-        """Apply optimization passes to reduce gate count."""
-        opt_pm = PassManager([
-            Optimize1qGates(),
-            InverseCancellation(),
-            CommutativeCancellation(),
-            CommutationAnalysis(),
-        ])
-        
-        optimized = opt_pm.run(circuit)
-        
-        # Manual optimization: cancel T·Tdg pairs
-        optimized = self._cancel_t_pairs(optimized)
-        
-        # Final transpile to ensure correct basis
-        final = transpile(
-            optimized,
-            basis_gates=['h', 't', 'tdg', 'cx'],
-            optimization_level=1
-        )
-        
-        return final
-    
-    def _cancel_t_pairs(self, circuit):
-        """Cancel adjacent T·Tdg and Tdg·T pairs."""
-        new_circuit = QuantumCircuit(circuit.num_qubits)
-        last_gates = {}
-        
-        for instruction in circuit.data:
-            gate = instruction.operation
-            if hasattr(instruction.qubits[0], 'index'):
-                qubits = [q.index for q in instruction.qubits]
-            else:
-                qubits = [circuit.find_bit(q)[0] for q in instruction.qubits]
-            gate_name = gate.name
-            
-            if len(qubits) == 1:
-                q = qubits[0]
-                if q in last_gates:
-                    last_gate = last_gates[q]
-                    if (last_gate == 't' and gate_name == 'tdg') or \
-                       (last_gate == 'tdg' and gate_name == 't'):
-                        del last_gates[q]
-                        continue
-                
-                if gate_name in ['t', 'tdg']:
-                    last_gates[q] = gate_name
-                else:
-                    if q in last_gates:
-                        del last_gates[q]
-            
-            new_circuit.append(gate, qubits)
-        
-        return new_circuit
 
 
 class DiagonalSolver(ChallengeSolver):
@@ -1477,16 +1290,14 @@ def create_hamiltonian_config_3():
 
 def create_hamiltonian_config_4():
     """
-    Create Hamiltonian configuration for Problem 4: exp(i*theta * (XX + YY))
-    Note: Need to check the actual angle from challenge documentation.
-    For now, using pi/7 as placeholder.
+    Create Hamiltonian configuration for Problem 4: exp(i*π/7 * (XX + YY))
     
     Returns:
         dict: Hamiltonian configuration
     """
     return {
         'pauli_terms': ['XX', 'YY'],
-        'angle': np.pi / 7,  # Update with actual angle from challenge
+        'angle': np.pi / 7,  # π/7 as specified in challenge documentation
         'num_qubits': 2,
         'trotter_steps': 1  # Commuting terms
     }
@@ -1511,8 +1322,8 @@ def create_hamiltonian_config_5():
 
 def create_hamiltonian_config_6():
     """
-    Create Hamiltonian configuration for Problem 6: exp(i*theta * (XX + ZI + IZ))
-    Note: Need to check the actual angle from challenge documentation.
+    Create Hamiltonian configuration for Problem 6: exp(i*π/7 * (XX + ZI + IZ))
+    
     Uses Trotterization since XX doesn't commute with ZI/IZ.
     
     Returns:
@@ -1520,7 +1331,7 @@ def create_hamiltonian_config_6():
     """
     return {
         'pauli_terms': ['XX', 'ZI', 'IZ'],
-        'angle': np.pi / 7,  # Update with actual angle from challenge
+        'angle': np.pi / 7,  # π/7 as specified in challenge documentation
         'num_qubits': 2,
         'trotter_steps': 4  # Trotterization for non-commuting terms
     }
@@ -1536,6 +1347,8 @@ def create_problem_8_unitary():
     Returns:
         np.ndarray: 4×4 complex matrix (placeholder)
     """
+    print("WARNING: Problem 8 uses placeholder matrix (identity). "
+          "Please update create_problem_8_unitary() with the actual matrix from the challenge PDF.")
     # TODO: Replace np.eye(4) with the actual matrix from challenge PDF
     return np.eye(4, dtype=complex)
 
