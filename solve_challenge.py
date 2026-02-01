@@ -1368,6 +1368,120 @@ def create_problem_10_unitary():
     return random_unitary(4, seed=42).data
 
 
+def update_readme_with_results(results_summary_path='output/results_summary.json'):
+    """
+    Update README.md with dynamic results table from results_summary.json.
+    
+    Args:
+        results_summary_path (str): Path to results_summary.json file
+    """
+    import json
+    import re
+    
+    # Strategy mapping
+    strategy_map = {
+        1: "Exact Synthesis (Zero Error)",
+        5: "Exact Synthesis (Zero Error)",
+        8: "Exact Synthesis (Zero Error)",
+        11: "Exact Synthesis (Zero Error)",
+        6: "Adaptive Trotterization",
+        3: "Pauli Gadgets",
+        4: "Pauli Gadgets",
+        2: "Best-of-N Solovay-Kitaev",
+        7: "Best-of-N Solovay-Kitaev",
+        9: "Best-of-N Solovay-Kitaev",
+        10: "Best-of-N Solovay-Kitaev",
+    }
+    
+    # Helper function to extract problem number
+    def extract_problem_number(problem_name):
+        match = re.search(r'Problem (\d+)', problem_name)
+        if match:
+            return int(match.group(1))
+        return None
+    
+    # Read results
+    try:
+        with open(results_summary_path, 'r') as f:
+            results = json.load(f)
+    except FileNotFoundError:
+        print(f"Warning: {results_summary_path} not found. Skipping README update.")
+        return
+    
+    # Generate table
+    table_lines = [
+        "| Problem | T-count | Distance | Strategy |",
+        "|---------|---------|----------|----------|"
+    ]
+    
+    for result in results:
+        problem_name = result['problem']
+        problem_num = extract_problem_number(problem_name)
+        
+        # Get T-count and distance
+        t_count = result.get('t_count', 'N/A')
+        distance = result.get('distance', 'N/A')
+        
+        # Format distance
+        if isinstance(distance, float):
+            if abs(distance) < 1e-10:
+                distance = "0.000000e+00"
+            else:
+                distance = f"{distance:.6e}"
+        elif distance == 'N/A':
+            distance = 'N/A'
+        
+        # Get strategy
+        strategy = strategy_map.get(problem_num, "N/A")
+        
+        # Format problem name (shorten if needed)
+        display_name = problem_name.replace("Problem ", "Prob ")
+        
+        table_lines.append(f"| {display_name} | {t_count} | {distance} | {strategy} |")
+    
+    # Read README.md
+    readme_path = 'README.md'
+    try:
+        with open(readme_path, 'r') as f:
+            readme_content = f.read()
+    except FileNotFoundError:
+        print(f"Warning: {readme_path} not found. Skipping README update.")
+        return
+    
+    # Find "## Results" section and replace content
+    if "## Results" in readme_content:
+        # Split content at "## Results"
+        parts = readme_content.split("## Results", 1)
+        if len(parts) == 2:
+            before_results = parts[0]
+            after_results = parts[1]
+            
+            # Find next section (##) or end of file
+            next_section_match = re.search(r'\n## ', after_results)
+            if next_section_match:
+                after_table = after_results[next_section_match.start():]
+            else:
+                after_table = ""
+            
+            # Create new content with table
+            table_content = "\n".join(table_lines)
+            new_content = before_results + "## Results\n\n" + table_content + "\n" + after_table
+            
+            # Write updated README
+            with open(readme_path, 'w') as f:
+                f.write(new_content)
+            print(f"README.md updated with results table.")
+        else:
+            print("Warning: Could not parse README.md structure. Skipping update.")
+    else:
+        # Append Results section at the end
+        table_content = "\n".join(table_lines)
+        new_content = readme_content + "\n\n## Results\n\n" + table_content + "\n"
+        with open(readme_path, 'w') as f:
+            f.write(new_content)
+        print(f"README.md updated with results table (appended).")
+
+
 def main():
     """
     Main execution: solve Problems 1-11.
@@ -1529,6 +1643,9 @@ def main():
             print(f"  {problem_name}: Failed to save ({str(e)[:50]}...)")
     
     print(f"\nAll outputs saved to directory: {output_dir}/")
+    
+    # Update README.md with results table
+    update_readme_with_results(summary_file)
 
 
 if __name__ == "__main__":
