@@ -403,13 +403,36 @@ class UnitarySolver(ChallengeSolver):
                     clean_circuit.append(inst.operation, qubits)
             unrolled = clean_circuit
         
-        # Use standard transpile with high optimization
-        # Qiskit's transpiler will use appropriate synthesis methods automatically
-        # This avoids the SolovayKitaev pass which has issues with unitary gates
+        # Apply Solovay-Kitaev explicitly
+        # Initialize SolovayKitaev with recursion_degree=2 (can be increased for better approximation)
+        skd = SolovayKitaev(recursion_degree=2)
+        
+        # Create PassManager with SolovayKitaev
+        # First ensure all gates are in ['u3', 'cx'] basis
+        pm = PassManager([
+            # Unroll any remaining custom definitions to u3 and cx
+            UnrollCustomDefinitions(standard_gates, ['u3', 'cx']),
+            # Explicitly apply SolovayKitaev to approximate u3 gates
+            skd,
+        ])
+        
+        # Run the pass manager to apply SolovayKitaev
+        try:
+            sk_circuit = pm.run(unrolled)
+        except Exception as e:
+            # Fallback: if SolovayKitaev fails, use standard transpile
+            print(f"  Warning: SolovayKitaev pass failed ({str(e)[:50]}...), using standard transpile")
+            sk_circuit = transpile(
+                unrolled,
+                basis_gates=['h', 't', 'tdg', 'cx'],
+                optimization_level=2
+            )
+        
+        # Translate to target basis ['h', 't', 'tdg', 'cx']
         sk_circuit = transpile(
-            unrolled,
+            sk_circuit,
             basis_gates=['h', 't', 'tdg', 'cx'],
-            optimization_level=3  # High optimization for better synthesis
+            optimization_level=1  # Light optimization to preserve SolovayKitaev structure
         )
         
         # Convert any S/Z gates that might remain
