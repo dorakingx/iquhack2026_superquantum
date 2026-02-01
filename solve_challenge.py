@@ -733,15 +733,15 @@ class StatePrepSolver(UnitarySolver):
     
     def calculate_distance(self):
         """
-        Calculate state vector distance for state preparation.
+        Calculate state vector distance for state preparation using fidelity.
         
         Returns:
-            float: State vector distance (with global phase optimization)
+            float: Fidelity-based distance (with global phase optimization)
         """
         if self.circuit is None:
             raise ValueError("Circuit has not been synthesized yet. Call synthesize() first.")
         
-        from qiskit.quantum_info import Statevector
+        from qiskit.quantum_info import Statevector, state_fidelity
         
         # Get target statevector
         psi_target = self.target_statevector
@@ -749,17 +749,12 @@ class StatePrepSolver(UnitarySolver):
         # Get actual statevector from circuit (applied to |00⟩)
         psi_actual = Statevector.from_instruction(self.circuit)
         
-        # Account for global phase: find optimal phase
-        # distance = min_φ ||psi_target - e^(iφ) * psi_actual||
-        inner_product = np.vdot(psi_target.data, psi_actual.data)
-        if np.abs(inner_product) < 1e-15:
-            # Orthogonal states
-            optimal_phase = 0.0
-        else:
-            optimal_phase = np.angle(inner_product)
+        # Calculate fidelity (handles global phase automatically)
+        fid = state_fidelity(psi_target, psi_actual)
         
-        psi_actual_phased = psi_actual.data * np.exp(1j * optimal_phase)
-        distance = np.linalg.norm(psi_target.data - psi_actual_phased)
+        # Convert fidelity to distance: distance = sqrt(1 - fidelity)
+        # Fidelity is between 0 and 1, so distance is between 0 and 1
+        distance = np.sqrt(max(0, 1 - fid))
         
         return float(distance)
     
