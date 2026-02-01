@@ -111,7 +111,22 @@ def export_to_openqasm(circuit, filename=None):
     Raises:
         IOError: If file writing fails
     """
-    qasm_string = circuit.qasm()
+    # Try different methods for different Qiskit versions
+    try:
+        # Newer Qiskit versions use qasm2 module
+        import qiskit.qasm2
+        qasm_string = qiskit.qasm2.dumps(circuit)
+    except (ImportError, AttributeError):
+        try:
+            # Older Qiskit versions have qasm() method
+            qasm_string = circuit.qasm()
+        except AttributeError:
+            # Fallback: use qasm3 and convert if needed
+            try:
+                import qiskit.qasm3
+                qasm_string = qiskit.qasm3.dumps(circuit)
+            except ImportError:
+                raise RuntimeError("Unable to export circuit to OpenQASM. Please check Qiskit version.")
     
     if filename is not None:
         with open(filename, 'w') as f:
