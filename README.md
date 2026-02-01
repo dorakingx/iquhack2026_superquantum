@@ -1,7 +1,5 @@
 # iQuHACK 2026 - Superquantum Challenge Solution
 
-**Team Name:** [Your Team Name]
-
 ## Overview
 
 This repository contains our solution to the Superquantum challenge at iQuHACK 2026. The challenge focuses on compiling target unitary matrices into quantum circuits using only the gate set `{H, T, T_dag, CNOT}` while minimizing T-count and operator norm distance.
