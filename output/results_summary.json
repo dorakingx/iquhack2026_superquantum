@@ -2,7 +2,7 @@
   {
     "problem": "Problem 1: Controlled-Y",
     "t_count": 8,
-    "distance": 1.7320508075688772
+    "distance": 6.662320157236692e-16
   },
   {
     "problem": "Problem 2: Controlled-Ry(\u03c0/7)",
@@ -21,8 +21,8 @@
   },
   {
     "problem": "Problem 5: exp(i*\u03c0/7 * (XX+YY+ZZ))",
-    "t_count": 18,
-    "distance": 1.4142135623730947
+    "t_count": 0,
+    "distance": 2.9768276542288623e-16
   },
   {
     "problem": "Problem 6: exp(i*\u03c0/7 * (XX+ZI+IZ))",

@@ -116,11 +116,22 @@ def decompose_clifford_exact(unitary, num_qubits):
         # Check if it's a Controlled-Y gate
         cy_unitary = create_controlled_y()
         if np.allclose(unitary, cy_unitary) or np.allclose(unitary, -cy_unitary):
-            # Use Qiskit's built-in CY gate
-            circuit = QuantumCircuit(2)
-            circuit.cy(0, 1)
-            # Decompose CY to basic gates
-            decomposed = circuit.decompose(reps=2)
+            # Try both qubit orderings to find the correct one
+            circuit1 = QuantumCircuit(2)
+            circuit1.cy(0, 1)
+            decomposed1 = circuit1.decompose(reps=2)
+            
+            circuit2 = QuantumCircuit(2)
+            circuit2.cy(1, 0)
+            decomposed2 = circuit2.decompose(reps=2)
+            
+            # Calculate distance for both
+            from utils import operator_norm_distance
+            dist1 = operator_norm_distance(unitary, decomposed1, optimize_phase=True)
+            dist2 = operator_norm_distance(unitary, decomposed2, optimize_phase=True)
+            
+            # Use the one with lower distance
+            decomposed = decomposed1 if dist1 < dist2 else decomposed2
         else:
             # Generic 2-qubit Clifford
             circuit = QuantumCircuit(num_qubits)
@@ -841,6 +852,7 @@ class HamiltonianSolver(ChallengeSolver):
         self.hamiltonian_config = hamiltonian_config
         self.problem_name = problem_name
         self.circuit = None
+        self._problem5_uses_swap = False  # Flag for Problem 5 exact SWAP synthesis
         
         # Extract configuration
         self.pauli_terms = hamiltonian_config.get('pauli_terms', [])
@@ -850,6 +862,31 @@ class HamiltonianSolver(ChallengeSolver):
         
         # Compute target unitary for distance calculation
         self.target_unitary = self._compute_target_unitary()
+    
+    def calculate_distance(self):
+        """
+        Calculate operator norm distance, with special handling for Problem 5 SWAP synthesis.
+        
+        Returns:
+            float: Operator norm distance (with global phase optimization)
+        """
+        if self.circuit is None:
+            raise ValueError("Circuit has not been synthesized yet. Call synthesize() first.")
+        
+        # Special case: Problem 5 with exact SWAP synthesis
+        if self._problem5_uses_swap:
+            # We know: exp(i*π/4 * (XX+YY+ZZ)) = e^{iπ/4} * SWAP
+            # Calculate distance with correct phase relationship
+            from qiskit.quantum_info import Operator
+            from scipy.linalg import svd
+            swap_unitary = Operator(self.circuit).data
+            phased_swap = np.exp(1j * np.pi / 4) * swap_unitary
+            diff = self.target_unitary - phased_swap
+            _, s, _ = svd(diff)
+            return float(s[0])  # operator norm
+        
+        # Default: use standard operator_norm_distance
+        return operator_norm_distance(self.target_unitary, self.circuit, optimize_phase=True)
     
     def _compute_target_unitary(self):
         """
@@ -1086,6 +1123,32 @@ class HamiltonianSolver(ChallengeSolver):
         - Problem 4-5: Commuting Pauli terms (sequential synthesis)
         - Problem 6: Non-commuting terms (Trotterization)
         """
+        # Special case: Problem 5 with exact SWAP synthesis
+        if "Problem 5" in self.problem_name:
+            if abs(self.angle - np.pi / 4) < 1e-10 and set(self.pauli_terms) == {'XX', 'YY', 'ZZ'}:
+                # exp(i*π/4 * (XX+YY+ZZ)) = e^{iπ/4} * SWAP
+                # Try exact SWAP gate synthesis
+                circuit = QuantumCircuit(self.num_qubits)
+                circuit.swap(0, 1)
+                
+                # Check distance manually with correct phase relationship
+                # We know: exp(i*π/4 * (XX+YY+ZZ)) = e^{iπ/4} * SWAP
+                from qiskit.quantum_info import Operator
+                from scipy.linalg import svd
+                swap_unitary = Operator(circuit).data
+                phased_swap = np.exp(1j * np.pi / 4) * swap_unitary
+                diff = self.target_unitary - phased_swap
+                _, s, _ = svd(diff)
+                manual_distance = s[0]  # operator norm
+                
+                if manual_distance < 1e-10:
+                    # Optimize the circuit
+                    optimized = self._optimize_circuit(circuit)
+                    self.circuit = optimized
+                    # Store flag to use exact distance for Problem 5
+                    self._problem5_uses_swap = True
+                    return
+        
         # Check if terms commute
         # For simplicity, assume Problems 4-5 commute, Problem 6 doesn't
         terms = self.pauli_terms
@@ -1491,6 +1554,21 @@ def main():
     """
     Main execution: solve Problems 1-11.
     """
+    import json
+    import os
+    
+    # Load existing results if available (for smart selective execution)
+    existing_results = {}
+    results_json_path = 'output/results_summary.json'
+    if os.path.exists(results_json_path):
+        try:
+            with open(results_json_path, 'r') as f:
+                existing_results_list = json.load(f)
+                for result in existing_results_list:
+                    existing_results[result['problem']] = result
+        except Exception as e:
+            print(f"Warning: Could not load existing results: {e}")
+    
     # Phases for Problem 11 (Diagonal Unitary) derived from iQuHACK 2026 PDF
     # Inputs 0000 to 1111 in order
     phases_11 = [
@@ -1540,6 +1618,17 @@ def main():
     results_summary = []
     
     for problem_name, target_unitary, solver_class, extra_config in problems:
+        # Check if we should skip (perfect solution)
+        if problem_name in existing_results:
+            distance = existing_results[problem_name].get('distance', float('inf'))
+            if distance < 1e-10:
+                print(f"Skipping {problem_name} (perfect solution, distance={distance:.2e})")
+                print("-" * 60)
+                # Add existing result to summary
+                results_summary.append(existing_results[problem_name])
+                print()
+                continue
+        
         print(f"Solving {problem_name}...")
         print("-" * 60)
         
@@ -1604,10 +1693,14 @@ def main():
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save summary to JSON file
+    # Merge new results with existing results
+    for result in results_summary:
+        existing_results[result['problem']] = result
+    
+    # Save merged summary to JSON file
     summary_file = os.path.join(output_dir, "results_summary.json")
     with open(summary_file, 'w') as f:
-        json.dump(results_summary, f, indent=2)
+        json.dump(list(existing_results.values()), f, indent=2)
     print(f"Results summary saved to: {summary_file}")
     
     # Save summary to text file
