@@ -537,6 +537,9 @@ class UnitarySolver(ChallengeSolver):
         
         optimized = opt_pm.run(circuit)
         
+        # Convert S/Z gates back to T gates (Optimize1qGates might merge t,t -> s)
+        optimized = convert_s_z_to_t(optimized)
+        
         # Manual optimization: cancel T·Tdg pairs
         optimized = self._cancel_t_pairs(optimized)
         
@@ -979,6 +982,9 @@ class DiagonalSolver(ChallengeSolver):
         
         optimized = opt_pm.run(circuit)
         
+        # Convert S/Z gates back to T gates (Optimize1qGates might merge t,t -> s)
+        optimized = convert_s_z_to_t(optimized)
+        
         # Manual optimization: cancel T·Tdg pairs
         optimized = self._cancel_t_pairs(optimized)
         
@@ -1336,6 +1342,9 @@ class HamiltonianSolver(ChallengeSolver):
         
         optimized = opt_pm.run(circuit)
         
+        # Convert S/Z gates back to T gates (Optimize1qGates might merge t,t -> s)
+        optimized = convert_s_z_to_t(optimized)
+        
         # Manual optimization: cancel T·Tdg pairs
         optimized = self._cancel_t_pairs(optimized)
         
@@ -1521,11 +1530,13 @@ def create_problem_8_unitary():
     """
     Create unitary matrix for Problem 8 (Structured Unitary 1).
     
-    Currently a placeholder (identity matrix). User will provide actual matrix later.
+    TODO: Update this function with the actual matrix from the challenge PDF.
+    Currently returns a placeholder (identity matrix).
     
     Returns:
         np.ndarray: 4×4 complex matrix (placeholder)
     """
+    # TODO: Replace np.eye(4) with the actual matrix from challenge PDF
     return np.eye(4, dtype=complex)
 
 
