@@ -564,6 +564,30 @@ class UnitarySolver(ChallengeSolver):
         
         # Final optimization on best circuit
         optimized = self._optimize_circuit(best_circuit)
+        
+        # Check distance - if high, try synthesizing the adjoint (only for Problems 9 and 10)
+        # Limit to specific problems to avoid excessive computation time
+        if optimized is not None and ("Problem 9" in self.problem_name or "Problem 10" in self.problem_name):
+            test_distance = operator_norm_distance(self.target_unitary, optimized, optimize_phase=True)
+            
+            # If distance is high, try synthesizing the adjoint (with limited attempts)
+            if test_distance > 0.5:
+                # Try adjoint: U† = (U*)^T
+                target_adjoint = np.conj(self.target_unitary).T
+                
+                # Create temporary solver with reduced attempts to save time
+                temp_solver = UnitarySolver(target_adjoint, "temp", recursion_degree=self.recursion_degree)
+                # Only try a quick synthesis (skip the full best-of-N for adjoint)
+                temp_solver.synthesize()
+                
+                if temp_solver.circuit is not None:
+                    # If we synthesized U†, we need the inverse circuit to get U
+                    adjoint_circuit = temp_solver.circuit.inverse()
+                    adjoint_distance = operator_norm_distance(self.target_unitary, adjoint_circuit, optimize_phase=True)
+                    
+                    if adjoint_distance < test_distance:
+                        return adjoint_circuit
+        
         return optimized
     
     def _optimize_circuit(self, circuit):
@@ -706,6 +730,38 @@ class StatePrepSolver(UnitarySolver):
         
         # EXPLICITLY call synthesize to ensure circuit is created
         self.synthesize()
+    
+    def calculate_distance(self):
+        """
+        Calculate state vector distance for state preparation.
+        
+        Returns:
+            float: State vector distance (with global phase optimization)
+        """
+        if self.circuit is None:
+            raise ValueError("Circuit has not been synthesized yet. Call synthesize() first.")
+        
+        from qiskit.quantum_info import Statevector
+        
+        # Get target statevector
+        psi_target = self.target_statevector
+        
+        # Get actual statevector from circuit (applied to |00⟩)
+        psi_actual = Statevector.from_instruction(self.circuit)
+        
+        # Account for global phase: find optimal phase
+        # distance = min_φ ||psi_target - e^(iφ) * psi_actual||
+        inner_product = np.vdot(psi_target.data, psi_actual.data)
+        if np.abs(inner_product) < 1e-15:
+            # Orthogonal states
+            optimal_phase = 0.0
+        else:
+            optimal_phase = np.angle(inner_product)
+        
+        psi_actual_phased = psi_actual.data * np.exp(1j * optimal_phase)
+        distance = np.linalg.norm(psi_target.data - psi_actual_phased)
+        
+        return float(distance)
     
     # No synthesize method needed; inherits from UnitarySolver
 
@@ -1114,12 +1170,11 @@ class HamiltonianSolver(ChallengeSolver):
         if len(active_qubits) > 1:
             self._apply_cnot_ladder(circuit, active_qubits, reverse=False)
         
-        # Step 3: Apply Rz(-2*angle) on last active qubit
-        # We want exp(i * angle * Z), but Rz(λ) = exp(-i * λ/2 * Z)
-        # So we need Rz(-2*angle) to get exp(i * angle * Z)
-        # Use exact synthesis if -2*angle is multiple of π/4, else approximate
+        # Step 3: Apply Rz(2*angle) on last active qubit
+        # Note: The sign will be determined in synthesize() by trying both +angle and -angle
+        # Use exact synthesis if 2*angle is multiple of π/4, else approximate
         last_qubit = active_qubits[-1]
-        rz_approximation = self._synthesize_rz(-angle)  # Changed from angle to -angle
+        rz_approximation = self._synthesize_rz(angle)  # Reverted to angle; sign handled in synthesize()
         
         # Insert the Rz approximation circuit on the last qubit
         # The rz_approximation is a single-qubit circuit, so we map qubit 0 to last_qubit
@@ -1187,56 +1242,87 @@ class HamiltonianSolver(ChallengeSolver):
         terms = self.pauli_terms
         
         if len(terms) == 1:
-            # Problem 3: Single term
-            circuit = self._synthesize_pauli_evolution(terms[0], self.angle)
+            # Problem 3: Single term - try both positive and negative angles
+            circuit_pos = self._synthesize_pauli_evolution(terms[0], self.angle)
+            circuit_neg = self._synthesize_pauli_evolution(terms[0], -self.angle)
+            
+            # Optimize both before comparing
+            circuit_pos = self._optimize_circuit(convert_s_z_to_t(circuit_pos))
+            circuit_neg = self._optimize_circuit(convert_s_z_to_t(circuit_neg))
+            
+            dist_pos = operator_norm_distance(self.target_unitary, circuit_pos, optimize_phase=True)
+            dist_neg = operator_norm_distance(self.target_unitary, circuit_neg, optimize_phase=True)
+            
+            circuit = circuit_pos if dist_pos < dist_neg else circuit_neg
         elif self.trotter_steps == 1 or self._check_commuting(terms):
-            # Problems 4-5: Commuting terms, synthesize sequentially
-            circuit = QuantumCircuit(self.num_qubits)
+            # Problems 4-5: Commuting terms - try both positive and negative angles
+            circuit_pos = QuantumCircuit(self.num_qubits)
+            circuit_neg = QuantumCircuit(self.num_qubits)
+            
             for term in terms:
-                term_circuit = self._synthesize_pauli_evolution(term, self.angle)
-                circuit.compose(term_circuit, inplace=True)
+                term_circuit_pos = self._synthesize_pauli_evolution(term, self.angle)
+                term_circuit_neg = self._synthesize_pauli_evolution(term, -self.angle)
+                circuit_pos.compose(term_circuit_pos, inplace=True)
+                circuit_neg.compose(term_circuit_neg, inplace=True)
+            
+            # Optimize both before comparing
+            circuit_pos = self._optimize_circuit(convert_s_z_to_t(circuit_pos))
+            circuit_neg = self._optimize_circuit(convert_s_z_to_t(circuit_neg))
+            
+            dist_pos = operator_norm_distance(self.target_unitary, circuit_pos, optimize_phase=True)
+            dist_neg = operator_norm_distance(self.target_unitary, circuit_neg, optimize_phase=True)
+            
+            circuit = circuit_pos if dist_pos < dist_neg else circuit_neg
         else:
-            # Problem 6: Non-commuting terms, use Adaptive Trotterization
+            # Problem 6: Non-commuting terms, use Adaptive Trotterization with both signs
             max_steps = 10
             target_distance = 0.03
             best_circuit = None
             best_distance = float('inf')
             circuit = None
             
-            for steps in range(1, max_steps + 1):
-                dt = self.angle / steps
-                test_circuit = QuantumCircuit(self.num_qubits)
+            # Try both positive and negative angles
+            for angle_sign in [1, -1]:
+                signed_angle = angle_sign * self.angle
                 
-                for _ in range(steps):
-                    for term in terms:
-                        term_circuit = self._synthesize_pauli_evolution(term, dt)
-                        test_circuit.compose(term_circuit, inplace=True)
-                
-                # Convert and optimize
-                test_circuit = convert_s_z_to_t(test_circuit)
-                optimized_test = self._optimize_circuit(test_circuit)
-                
-                # Calculate distance
-                test_distance = operator_norm_distance(self.target_unitary, optimized_test, optimize_phase=True)
-                
-                if test_distance < target_distance:
-                    circuit = optimized_test
-                    break
-                
-                # Track best so far
-                if test_distance < best_distance:
-                    best_distance = test_distance
-                    best_circuit = optimized_test
+                for steps in range(1, max_steps + 1):
+                    dt = signed_angle / steps
+                    test_circuit = QuantumCircuit(self.num_qubits)
+                    
+                    for _ in range(steps):
+                        for term in terms:
+                            term_circuit = self._synthesize_pauli_evolution(term, dt)
+                            test_circuit.compose(term_circuit, inplace=True)
+                    
+                    # Convert and optimize
+                    test_circuit = convert_s_z_to_t(test_circuit)
+                    optimized_test = self._optimize_circuit(test_circuit)
+                    
+                    # Calculate distance
+                    test_distance = operator_norm_distance(self.target_unitary, optimized_test, optimize_phase=True)
+                    
+                    if test_distance < target_distance:
+                        if circuit is None or test_distance < operator_norm_distance(self.target_unitary, circuit, optimize_phase=True):
+                            circuit = optimized_test
+                        break
+                    
+                    # Track best so far
+                    if test_distance < best_distance:
+                        best_distance = test_distance
+                        best_circuit = optimized_test
             
             # Use best circuit found (or last one if all failed)
             if circuit is None:
                 circuit = best_circuit
         
-        # Final optimization using the same optimization passes as UnitarySolver
-        # (convert_s_z_to_t is called at the end of _optimize_circuit)
-        optimized = self._optimize_circuit(circuit)
-        
-        self.circuit = optimized
+        # Final optimization (circuit is already optimized in the try-both-signs logic above)
+        # Only optimize if not already optimized
+        if circuit is not None:
+            self.circuit = circuit
+        else:
+            # Fallback: optimize the circuit
+            optimized = self._optimize_circuit(convert_s_z_to_t(circuit))
+            self.circuit = optimized
     
     def _optimize_circuit(self, circuit):
         """
@@ -1638,8 +1724,8 @@ def main():
         ("Problem 6: exp(i*π/7 * (XX+ZI+IZ))", None, HamiltonianSolver, create_hamiltonian_config_6()),
         ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42, 'recursion_degree': 4}),
         ("Problem 8: Structured Unitary 1", create_problem_8_unitary(), UnitarySolver, None),
-        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, {'recursion_degree': 4}),
-        ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 4}),
+        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, {'recursion_degree': 3}),
+        ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 3}),
         ("Problem 11: Diagonal Unitary", None, DiagonalSolver, {'phases': phases_11}),
     ]
     
@@ -1654,7 +1740,7 @@ def main():
         # Check if we should skip (perfect solution)
         if problem_name in existing_results:
             distance = existing_results[problem_name].get('distance', float('inf'))
-            if distance < 1e-10:
+            if distance < 1e-5:
                 print(f"Skipping {problem_name} (perfect solution, distance={distance:.2e})")
                 print("-" * 60)
                 # Add existing result to summary
