@@ -20,7 +20,7 @@ from qiskit.transpiler.passes.optimization import (
 from qiskit.transpiler.passes.synthesis import SolovayKitaev
 from qiskit.circuit.library import standard_gates
 
-from utils import operator_norm_distance, count_t_gates, export_to_openqasm
+from utils import operator_norm_distance, count_t_gates, export_to_openqasm, map_rz_to_clifford_t
 
 
 def is_clifford_unitary(unitary):
@@ -291,8 +291,9 @@ class UnitarySolver(ChallengeSolver):
         Synthesize a unitary matrix into a Clifford+T circuit.
         
         Uses smart decomposition:
-        1. Check if unitary is Clifford → use exact decomposition
-        2. Otherwise → use Solovay-Kitaev approximation
+        1. Check if unitary matches QFT → use exact QFT synthesis
+        2. Check if unitary is Clifford → use exact decomposition
+        3. Otherwise → use Solovay-Kitaev approximation
         """
         # Determine number of qubits from unitary dimension
         dim = self.target_unitary.shape[0]
@@ -300,6 +301,23 @@ class UnitarySolver(ChallengeSolver):
         
         if 2**num_qubits != dim:
             raise ValueError(f"Unitary dimension {dim} is not a power of 2")
+        
+        # Check if unitary matches QFT (up to global phase)
+        from qiskit.circuit.library import QFT
+        qft_circuit = QFT(num_qubits)
+        qft_unitary = Operator(qft_circuit).data
+        
+        # Compare with target (accounting for global phase)
+        # Check if U_target ≈ e^(iφ) * U_QFT
+        # Use trace to find optimal phase
+        trace_product = np.trace(np.conj(self.target_unitary).T @ qft_unitary)
+        if np.abs(trace_product) > 1e-10:
+            optimal_phase = np.angle(trace_product)
+            qft_unitary_phased = np.exp(1j * optimal_phase) * qft_unitary
+            if np.allclose(self.target_unitary, qft_unitary_phased, atol=1e-10):
+                # Use exact QFT synthesis
+                self.circuit = self._synthesize_qft_exact(num_qubits)
+                return
         
         # Check if unitary is Clifford
         is_clifford = is_clifford_unitary(self.target_unitary)
@@ -310,6 +328,40 @@ class UnitarySolver(ChallengeSolver):
         else:
             # Use Solovay-Kitaev synthesis
             self.circuit = self._synthesize_solovay_kitaev(num_qubits)
+    
+    def _synthesize_qft_exact(self, num_qubits):
+        """
+        Synthesize QFT using exact Qiskit QFT circuit.
+        
+        Args:
+            num_qubits (int): Number of qubits
+        
+        Returns:
+            QuantumCircuit: Optimized circuit in ['h', 't', 'tdg', 'cx'] basis
+        """
+        from qiskit.circuit.library import QFT
+        
+        # Create QFT circuit
+        qft_circuit = QFT(num_qubits)
+        
+        # Decompose and transpile to target basis
+        # QFT contains CP gates which transpile well to T gates
+        decomposed = qft_circuit.decompose(reps=2)
+        
+        # Transpile to target basis
+        transpiled = transpile(
+            decomposed,
+            basis_gates=['h', 't', 'tdg', 'cx'],
+            optimization_level=2
+        )
+        
+        # Convert S/Z gates to T gates
+        circuit_with_t = convert_s_z_to_t(transpiled)
+        
+        # Apply optimization
+        optimized = self._optimize_circuit(circuit_with_t)
+        
+        return optimized
     
     def _synthesize_clifford_exact(self, num_qubits):
         """
@@ -635,24 +687,39 @@ class StatePrepSolver(ChallengeSolver):
         
         Delegates to UnitarySolver synthesis logic.
         """
-        # Determine number of qubits from unitary dimension
-        dim = self.target_unitary.shape[0]
-        num_qubits = int(np.log2(dim))
+    def _synthesize_qft_exact(self, num_qubits):
+        """
+        Synthesize QFT using exact Qiskit QFT circuit.
         
-        if 2**num_qubits != dim:
-            raise ValueError(f"Unitary dimension {dim} is not a power of 2")
+        Args:
+            num_qubits (int): Number of qubits
         
-        # Check if unitary is Clifford
-        is_clifford = is_clifford_unitary(self.target_unitary)
+        Returns:
+            QuantumCircuit: Optimized circuit in ['h', 't', 'tdg', 'cx'] basis
+        """
+        from qiskit.circuit.library import QFT
         
-        if is_clifford:
-            # Use exact Clifford decomposition
-            circuit = self._synthesize_clifford_exact(num_qubits)
-        else:
-            # Use Solovay-Kitaev synthesis
-            circuit = self._synthesize_solovay_kitaev(num_qubits)
+        # Create QFT circuit
+        qft_circuit = QFT(num_qubits)
         
-        self.circuit = circuit
+        # Decompose and transpile to target basis
+        # QFT contains CP gates which transpile well to T gates
+        decomposed = qft_circuit.decompose(reps=2)
+        
+        # Transpile to target basis
+        transpiled = transpile(
+            decomposed,
+            basis_gates=['h', 't', 'tdg', 'cx'],
+            optimization_level=2
+        )
+        
+        # Convert S/Z gates to T gates
+        circuit_with_t = convert_s_z_to_t(transpiled)
+        
+        # Apply optimization
+        optimized = self._optimize_circuit(circuit_with_t)
+        
+        return optimized
     
     def _synthesize_clifford_exact(self, num_qubits):
         """Synthesize Clifford unitary using exact decomposition."""
@@ -828,47 +895,6 @@ class DiagonalSolver(ChallengeSolver):
         # Store phases for reference
         self.phases = phases
     
-    def _map_rz_to_clifford_t(self, angle):
-        """
-        Map Rz(angle) gate to exact T/S/Z gate sequence when angle is a multiple of π/4.
-        
-        Args:
-            angle (float): Rotation angle (should be multiple of π/4)
-        
-        Returns:
-            list: List of gate names (strings) representing the exact decomposition
-                  e.g., ['t'], ['s'], ['z'], ['s', 'tdg'], etc.
-        """
-        # Normalize angle to [0, 2π)
-        angle = angle % (2 * np.pi)
-        
-        # Map to nearest π/4 multiple
-        # Round to nearest multiple of π/4
-        k = round(angle / (np.pi / 4)) % 8
-        
-        # Map k to gate sequence
-        # k=0: Rz(0) = Identity → []
-        # k=1: Rz(π/4) = T → ['t']
-        # k=2: Rz(π/2) = S → ['s']
-        # k=3: Rz(3π/4) = S·Tdg → ['s', 'tdg']
-        # k=4: Rz(π) = Z → ['z']
-        # k=5: Rz(5π/4) = Z·T → ['z', 't']
-        # k=6: Rz(3π/2) = Z·S → ['z', 's']
-        # k=7: Rz(7π/4) = Z·S·Tdg → ['z', 's', 'tdg']
-        
-        gate_map = {
-            0: [],
-            1: ['t'],
-            2: ['s'],
-            3: ['s', 'tdg'],
-            4: ['z'],
-            5: ['z', 't'],
-            6: ['z', 's'],
-            7: ['z', 's', 'tdg']
-        }
-        
-        return gate_map.get(k, [])
-    
     def synthesize(self):
         """
         Synthesize diagonal unitary using exact decomposition.
@@ -910,7 +936,7 @@ class DiagonalSolver(ChallengeSolver):
                 angle = float(gate.params[0])
                 
                 # Map to exact T/S/Z gates
-                gate_sequence = self._map_rz_to_clifford_t(angle)
+                gate_sequence = map_rz_to_clifford_t(angle)
                 
                 # Apply gates in sequence
                 for g in gate_sequence:
@@ -1102,6 +1128,45 @@ class HamiltonianSolver(ChallengeSolver):
             for i in range(len(qubits) - 1):
                 circuit.cx(qubits[i], qubits[i + 1])
     
+    def _apply_exact_rz_or_approximate(self, angle):
+        """
+        Apply Rz(angle) exactly if angle is multiple of π/4, else approximate.
+        
+        Checks if 2*angle is a multiple of π/4. If so, uses exact synthesis
+        with T/S/Z gates. Otherwise, falls back to SolovayKitaev approximation.
+        
+        Args:
+            angle (float): Rotation angle (for Rz(2*angle) in Pauli evolution)
+        
+        Returns:
+            QuantumCircuit: Single-qubit circuit implementing Rz(angle) exactly or approximately
+        """
+        two_angle = 2 * angle
+        # Check if 2*angle is multiple of π/4
+        pi_over_4 = np.pi / 4
+        remainder = (two_angle % pi_over_4)
+        # Check if remainder is close to 0 (exact multiple)
+        tolerance = 1e-10
+        if remainder < tolerance or abs(remainder - pi_over_4) < tolerance:
+            # Exact synthesis
+            gate_sequence = map_rz_to_clifford_t(two_angle)
+            circuit = QuantumCircuit(1)
+            for gate_name in gate_sequence:
+                if gate_name == 't':
+                    circuit.t(0)
+                elif gate_name == 'tdg':
+                    circuit.tdg(0)
+                elif gate_name == 's':
+                    circuit.s(0)
+                elif gate_name == 'sdg':
+                    circuit.sdg(0)
+                elif gate_name == 'z':
+                    circuit.z(0)
+            return circuit
+        else:
+            # Use SolovayKitaev approximation
+            return self._approximate_rz_with_solovay_kitaev(angle)
+    
     def _approximate_rz_with_solovay_kitaev(self, angle):
         """
         Approximate Rz(angle) gate using SolovayKitaev.
@@ -1180,9 +1245,10 @@ class HamiltonianSolver(ChallengeSolver):
             self._apply_cnot_ladder(circuit, active_qubits, reverse=False)
         
         # Step 3: Apply Rz(2*angle) on last active qubit
-        # This is the only non-Clifford gate
+        # This is the only non-Clifford gate (unless angle is special)
+        # Use exact synthesis if 2*angle is multiple of π/4, else approximate
         last_qubit = active_qubits[-1]
-        rz_approximation = self._approximate_rz_with_solovay_kitaev(2 * angle)
+        rz_approximation = self._apply_exact_rz_or_approximate(angle)
         
         # Insert the Rz approximation circuit on the last qubit
         # The rz_approximation is a single-qubit circuit, so we map qubit 0 to last_qubit
@@ -1413,15 +1479,16 @@ def create_hamiltonian_config_4():
 
 def create_hamiltonian_config_5():
     """
-    Create Hamiltonian configuration for Problem 5: exp(i*theta * (XX + YY + ZZ))
-    Note: Need to check the actual angle from challenge documentation.
+    Create Hamiltonian configuration for Problem 5: exp(i*π/4 * (XX + YY + ZZ))
+    
+    The angle is π/4 as specified in the challenge documentation (H_2).
     
     Returns:
         dict: Hamiltonian configuration
     """
     return {
         'pauli_terms': ['XX', 'YY', 'ZZ'],
-        'angle': np.pi / 7,  # Update with actual angle from challenge
+        'angle': np.pi / 4,  # π/4 as specified in challenge documentation
         'num_qubits': 2,
         'trotter_steps': 1  # All terms commute
     }

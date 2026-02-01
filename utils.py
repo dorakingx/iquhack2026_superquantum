@@ -134,3 +134,58 @@ def export_to_openqasm(circuit, filename=None):
         return None
     else:
         return qasm_string
+
+
+def map_rz_to_clifford_t(angle):
+    """
+    Map Rz(angle) gate to exact T/S/Z gate sequence when angle is a multiple of π/4.
+    
+    This function maps rotation angles that are multiples of π/4 to exact Clifford+T
+    gate sequences, avoiding the need for approximation.
+    
+    Args:
+        angle (float): Rotation angle (should be multiple of π/4)
+    
+    Returns:
+        list: List of gate names (strings) representing the exact decomposition
+              e.g., ['t'], ['s'], ['z'], ['s', 'tdg'], etc.
+              Returns empty list [] for Rz(0) = Identity.
+    
+    Examples:
+        >>> map_rz_to_clifford_t(np.pi / 4)
+        ['t']
+        >>> map_rz_to_clifford_t(np.pi / 2)
+        ['s']
+        >>> map_rz_to_clifford_t(np.pi)
+        ['z']
+    """
+    # Normalize angle to [0, 2π)
+    angle = angle % (2 * np.pi)
+    
+    # Map to nearest π/4 multiple
+    # Round to nearest multiple of π/4
+    pi_over_4 = np.pi / 4
+    k = round(angle / pi_over_4) % 8
+    
+    # Map k to gate sequence
+    # k=0: Rz(0) = Identity → []
+    # k=1: Rz(π/4) = T → ['t']
+    # k=2: Rz(π/2) = S → ['s']
+    # k=3: Rz(3π/4) = S·Tdg → ['s', 'tdg']
+    # k=4: Rz(π) = Z → ['z']
+    # k=5: Rz(5π/4) = Z·T → ['z', 't']
+    # k=6: Rz(3π/2) = Z·S → ['z', 's']
+    # k=7: Rz(7π/4) = Z·S·Tdg → ['z', 's', 'tdg']
+    
+    gate_map = {
+        0: [],
+        1: ['t'],
+        2: ['s'],
+        3: ['s', 'tdg'],
+        4: ['z'],
+        5: ['z', 't'],
+        6: ['z', 's'],
+        7: ['z', 's', 'tdg']
+    }
+    
+    return gate_map.get(k, [])
