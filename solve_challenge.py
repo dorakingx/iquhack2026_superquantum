@@ -399,7 +399,7 @@ class UnitarySolver(ChallengeSolver):
             QuantumCircuit: Approximated circuit in ['h', 't', 'tdg', 'cx'] basis
         """
         # Best-of-N compilation: try multiple synthesis attempts for all cases
-        num_attempts = 3
+        num_attempts = 10  # Increased from 3 for better optimization
         best_circuit = None
         best_t_count = float('inf')
         
@@ -503,14 +503,16 @@ class UnitarySolver(ChallengeSolver):
                 sk_circuit = transpile(
                     unrolled,
                     basis_gates=['h', 't', 'tdg', 'cx'],
-                    optimization_level=opt_level
+                    optimization_level=opt_level,
+                    seed_transpiler=42 + attempt  # Vary seed for each attempt
                 )
             
             # Translate to target basis ['h', 't', 'tdg', 'cx']
             sk_circuit = transpile(
                 sk_circuit,
                 basis_gates=['h', 't', 'tdg', 'cx'],
-                optimization_level=opt_level  # Use varying optimization level
+                optimization_level=opt_level,  # Use varying optimization level
+                seed_transpiler=42 + attempt  # Vary seed for each attempt
             )
             
             # Convert any S/Z gates that might remain
