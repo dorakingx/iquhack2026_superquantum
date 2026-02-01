@@ -259,6 +259,8 @@ class ChallengeSolver(ABC):
             dict: Results dictionary with 't_count', 'distance', and 'circuit' keys
         """
         self.synthesize()
+        if self.circuit is None:
+            raise RuntimeError("Circuit synthesis failed. synthesize() did not create a circuit.")
         results = self.evaluate_circuit()
         results['circuit'] = self.circuit
         return results
@@ -658,6 +660,9 @@ class StatePrepSolver(UnitarySolver):
         
         # Initialize parent UnitarySolver
         super().__init__(Q_mat, problem_name)
+        
+        # EXPLICITLY call synthesize to ensure circuit is created
+        self.synthesize()
     
     # No synthesize method needed; inherits from UnitarySolver
 
@@ -1552,6 +1557,10 @@ def main():
                 solver = solver_class(target_unitary, problem_name, recursion_degree=recursion_degree)
             
             results = solver.solve()
+            
+            # Verify circuit was synthesized
+            if solver.circuit is None:
+                raise RuntimeError(f"Circuit synthesis failed for {problem_name}. Circuit is None after solve().")
             
             t_count = results['t_count']
             distance = results['distance']
