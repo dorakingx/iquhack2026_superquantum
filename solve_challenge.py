@@ -403,141 +403,15 @@ class UnitarySolver(ChallengeSolver):
         Returns:
             QuantumCircuit: Approximated circuit in ['h', 't', 'tdg', 'cx'] basis
         """
-        # Check if this is Problem 10 (Random Unitary) - use best-of-N compilation
-        is_problem_10 = "Problem 10" in self.problem_name or "Random Unitary" in self.problem_name
+        # Best-of-N compilation: try multiple synthesis attempts for all cases
+        num_attempts = 3
+        best_circuit = None
+        best_t_count = float('inf')
         
-        if is_problem_10:
-            # Best-of-N compilation: try multiple synthesis attempts
-            num_attempts = 5
-            best_circuit = None
-            best_t_count = float('inf')
+        for attempt in range(num_attempts):
+            # Try different optimization levels
+            opt_level = (attempt % 3) + 1  # Cycle through 1, 2, 3
             
-            for attempt in range(num_attempts):
-                # Try different optimization levels
-                opt_level = (attempt % 3) + 1  # Cycle through 1, 2, 3
-                
-                # For Controlled-Ry, use a more direct approach
-                # Create circuit using Qiskit's built-in gates if possible
-                circuit = QuantumCircuit(num_qubits)
-                
-                # Check if it's a Controlled-Ry gate
-                if num_qubits == 2:
-                    # Try to extract the angle from the unitary
-                    # Controlled-Ry(θ) has specific structure
-                    # CRy(θ) = |0><0| ⊗ I + |1><1| ⊗ Ry(θ)
-                    # The (1,1) and (3,3) entries are cos(θ/2)
-                    # The (1,3) entry is -sin(θ/2), (3,1) is sin(θ/2)
-                    try:
-                        cos_half_theta = self.target_unitary[1, 1].real
-                        sin_half_theta = -self.target_unitary[1, 3].real
-                        
-                        # Calculate angle
-                        theta = 2 * np.arctan2(abs(sin_half_theta), abs(cos_half_theta))
-                        
-                        # Verify it's actually a CRy gate by checking the structure
-                        expected = create_controlled_ry(theta)
-                        if np.allclose(self.target_unitary, expected, atol=1e-10):
-                            # Use Qiskit's cry gate
-                            circuit.cry(theta, 0, 1)
-                        else:
-                            # Not a CRy, use unitary gate
-                            circuit.unitary(self.target_unitary, range(num_qubits), label='target')
-                    except Exception as e:
-                        # Fallback: use unitary gate
-                        circuit.unitary(self.target_unitary, range(num_qubits), label='target')
-                else:
-                    circuit.unitary(self.target_unitary, range(num_qubits), label='target')
-                
-                # Decompose the circuit completely - this should break down CRy
-                decomposed = circuit.decompose(reps=4)
-                
-                # Check if there are any unitary gates remaining
-                has_unitary = any(inst.operation.name == 'unitary' for inst in decomposed.data)
-                
-                if has_unitary:
-                    # Force decomposition by transpiling to a basis that doesn't include unitary
-                    unrolled = transpile(
-                        decomposed,
-                        basis_gates=['u3', 'cx'],
-                        optimization_level=0
-                    )
-                    # Decompose again
-                    unrolled = unrolled.decompose(reps=3)
-                    # Check again
-                    has_unitary = any(inst.operation.name == 'unitary' for inst in unrolled.data)
-                    if has_unitary:
-                        # Still has unitary gates - force remove them by creating new circuit
-                        new_circuit = QuantumCircuit(num_qubits)
-                        for inst in unrolled.data:
-                            if inst.operation.name != 'unitary':
-                                new_circuit.append(inst.operation, [q.index for q in inst.qubits])
-                        unrolled = new_circuit
-                else:
-                    # Already decomposed, just transpile to u3 and cx
-                    unrolled = transpile(
-                        decomposed,
-                        basis_gates=['u3', 'cx'],
-                        optimization_level=0
-                    )
-                
-                # Final check: ensure no unitary gates before SolovayKitaev
-                final_check = any(inst.operation.name == 'unitary' for inst in unrolled.data)
-                if final_check:
-                    # Remove unitary gates completely
-                    clean_circuit = QuantumCircuit(num_qubits)
-                    for inst in unrolled.data:
-                        if inst.operation.name != 'unitary':
-                            qubits = [unrolled.find_bit(q)[0] for q in inst.qubits]
-                            clean_circuit.append(inst.operation, qubits)
-                    unrolled = clean_circuit
-                
-                # Apply Solovay-Kitaev explicitly
-                # Initialize SolovayKitaev with recursion_degree (default 2, can be increased for better approximation)
-                skd = SolovayKitaev(recursion_degree=self.recursion_degree)
-                
-                # Create PassManager with SolovayKitaev
-                # First ensure all gates are in ['u3', 'cx'] basis
-                pm = PassManager([
-                    # Unroll any remaining custom definitions to u3 and cx
-                    UnrollCustomDefinitions(standard_gates, ['u3', 'cx']),
-                    # Explicitly apply SolovayKitaev to approximate u3 gates
-                    skd,
-                ])
-                
-                # Run the pass manager to apply SolovayKitaev
-                try:
-                    sk_circuit = pm.run(unrolled)
-                except Exception as e:
-                    # Fallback: if SolovayKitaev fails, use standard transpile
-                    sk_circuit = transpile(
-                        unrolled,
-                        basis_gates=['h', 't', 'tdg', 'cx'],
-                        optimization_level=opt_level
-                    )
-                
-                # Translate to target basis ['h', 't', 'tdg', 'cx']
-                sk_circuit = transpile(
-                    sk_circuit,
-                    basis_gates=['h', 't', 'tdg', 'cx'],
-                    optimization_level=opt_level  # Use varying optimization level
-                )
-                
-                # Convert any S/Z gates that might remain
-                sk_circuit = convert_s_z_to_t(sk_circuit)
-                
-                # Calculate T-count before final optimization
-                t_count = count_t_gates(sk_circuit)
-                
-                if t_count < best_t_count:
-                    best_t_count = t_count
-                    best_circuit = sk_circuit
-            
-            # Final optimization on best circuit
-            optimized = self._optimize_circuit(best_circuit)
-            return optimized
-        
-        else:
-            # Standard single synthesis for other problems
             # For Controlled-Ry, use a more direct approach
             # Create circuit using Qiskit's built-in gates if possible
             circuit = QuantumCircuit(num_qubits)
@@ -631,27 +505,32 @@ class UnitarySolver(ChallengeSolver):
                 sk_circuit = pm.run(unrolled)
             except Exception as e:
                 # Fallback: if SolovayKitaev fails, use standard transpile
-                print(f"  Warning: SolovayKitaev pass failed ({str(e)[:50]}...), using standard transpile")
                 sk_circuit = transpile(
                     unrolled,
                     basis_gates=['h', 't', 'tdg', 'cx'],
-                    optimization_level=2
+                    optimization_level=opt_level
                 )
             
             # Translate to target basis ['h', 't', 'tdg', 'cx']
             sk_circuit = transpile(
                 sk_circuit,
                 basis_gates=['h', 't', 'tdg', 'cx'],
-                optimization_level=1  # Light optimization to preserve SolovayKitaev structure
+                optimization_level=opt_level  # Use varying optimization level
             )
             
             # Convert any S/Z gates that might remain
             sk_circuit = convert_s_z_to_t(sk_circuit)
             
-            # Final optimization
-            optimized = self._optimize_circuit(sk_circuit)
+            # Calculate T-count before final optimization
+            t_count = count_t_gates(sk_circuit)
             
-            return optimized
+            if t_count < best_t_count:
+                best_t_count = t_count
+                best_circuit = sk_circuit
+        
+        # Final optimization on best circuit
+        optimized = self._optimize_circuit(best_circuit)
+        return optimized
     
     def _optimize_circuit(self, circuit):
         """
@@ -749,9 +628,6 @@ class StatePrepSolver(UnitarySolver):
     """
     
     def __init__(self, seed, problem_name):
-        """
-        Initialize StatePrepSolver with a seed.
-        """
         from qiskit.quantum_info import random_statevector
         
         # Generate target statevector
@@ -759,10 +635,10 @@ class StatePrepSolver(UnitarySolver):
         psi = self.target_statevector.data
         
         # Construct unitary that maps |00⟩ to |ψ⟩ using QR decomposition
+        # (Start with |ψ⟩ as first column, complete basis via Gram-Schmidt)
         basis_matrix = np.zeros((4, 4), dtype=complex)
         basis_matrix[:, 0] = psi
         
-        # Gram-Schmidt to complete the basis
         standard_basis = np.eye(4, dtype=complex)
         for i in range(1, 4):
             v = standard_basis[:, i]
@@ -772,23 +648,21 @@ class StatePrepSolver(UnitarySolver):
             if norm > 1e-10:
                 basis_matrix[:, i] = v / norm
             else:
-                # Handle linear dependence
                 v = np.random.randn(4) + 1j * np.random.randn(4)
                 for j in range(i):
                     v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
                 basis_matrix[:, i] = v / np.linalg.norm(v)
         
-        # QR decomposition to ensure unitarity
-        Q, _ = np.linalg.qr(basis_matrix)
+        Q_mat, _ = np.linalg.qr(basis_matrix)
         
-        # Adjust phase of first column to match psi
-        phase_diff = np.angle(np.vdot(psi, Q[:, 0]))
-        Q[:, 0] = Q[:, 0] * np.exp(-1j * phase_diff)
+        # Adjust phase to match psi exactly
+        phase_diff = np.angle(np.vdot(psi, Q_mat[:, 0]))
+        Q_mat[:, 0] = Q_mat[:, 0] * np.exp(-1j * phase_diff)
         
-        # Initialize UnitarySolver (parent) with the constructed unitary
-        super().__init__(Q, problem_name)
-
-    # Note: NO synthesize method here. We inherit it from UnitarySolver.
+        # Initialize parent UnitarySolver
+        super().__init__(Q_mat, problem_name)
+    
+    # No synthesize method needed; inherits from UnitarySolver
 
 
 class DiagonalSolver(ChallengeSolver):
@@ -1449,7 +1323,7 @@ def create_hamiltonian_config_6():
 
 
 def create_problem_8_unitary():
-    print("WARNING: Problem 8 is using identity matrix placeholder! Update with actual matrix.")
+    print("WARNING: Problem 8 is placeholder (Identity). Update with actual matrix from PDF!")
     return np.eye(4, dtype=complex)
 
 
