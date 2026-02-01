@@ -4,12 +4,12 @@ Superquantum Challenge Results
 
 Problem 1: Controlled-Y: T-count=8, Distance=6.662320e-16
 Problem 2: Controlled-Ry(π/7): T-count=24490, Distance=4.044135e-02
-Problem 3: exp(i*π/7 * Z⊗Z): T-count=13422, Distance=6.575474e-01
-Problem 4: exp(i*π/7 * (XX+YY)): T-count=26856, Distance=1.999463e+00
+Problem 3: exp(i*π/7 * Z⊗Z): T-count=13276, Distance=1.566052e+00
+Problem 4: exp(i*π/7 * (XX+YY)): T-count=26564, Distance=4.523325e-01
 Problem 5: exp(i*π/7 * (XX+YY+ZZ)): T-count=0, Distance=2.976828e-16
-Problem 6: exp(i*π/7 * (XX+ZI+IZ)): T-count=39456, Distance=1.368487e+00
-Problem 7: State Preparation: T-count=103931, Distance=8.094897e-01
+Problem 6: exp(i*π/7 * (XX+ZI+IZ)): T-count=308096, Distance=1.629662e-01
+Problem 7: State Preparation: T-count=104650, Distance=1.183220e+00
 Problem 8: Structured Unitary 1: T-count=2, Distance=1.111140e+00
-Problem 9: Structured Unitary 2: T-count=65030, Distance=1.866841e+00
+Problem 9: Structured Unitary 2: T-count=53312, Distance=1.851273e+00
 Problem 10: Random Unitary: T-count=105431, Distance=1.967564e+00
 Problem 11: Diagonal Unitary: T-count=25, Distance=1.265849e-15

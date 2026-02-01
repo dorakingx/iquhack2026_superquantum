@@ -98,13 +98,13 @@ superquantum/
 |---------|---------|----------|----------|
 | Prob 1: Controlled-Y | 8 | 0.000000e+00 | Exact Synthesis (Zero Error) |
 | Prob 2: Controlled-Ry(π/7) | 24490 | 4.044135e-02 | Best-of-N Solovay-Kitaev |
-| Prob 3: exp(i*π/7 * Z⊗Z) | 13422 | 6.575474e-01 | Pauli Gadgets |
-| Prob 4: exp(i*π/7 * (XX+YY)) | 26856 | 1.999463e+00 | Pauli Gadgets |
+| Prob 3: exp(i*π/7 * Z⊗Z) | 13276 | 1.566052e+00 | Pauli Gadgets |
+| Prob 4: exp(i*π/7 * (XX+YY)) | 26564 | 4.523325e-01 | Pauli Gadgets |
 | Prob 5: exp(i*π/7 * (XX+YY+ZZ)) | 0 | 0.000000e+00 | Exact Synthesis (Zero Error) |
-| Prob 6: exp(i*π/7 * (XX+ZI+IZ)) | 39456 | 1.368487e+00 | Adaptive Trotterization |
-| Prob 7: State Preparation | 103931 | 8.094897e-01 | Best-of-N Solovay-Kitaev |
+| Prob 6: exp(i*π/7 * (XX+ZI+IZ)) | 308096 | 1.629662e-01 | Adaptive Trotterization |
+| Prob 7: State Preparation | 104650 | 1.183220e+00 | Best-of-N Solovay-Kitaev |
 | Prob 8: Structured Unitary 1 | 2 | 1.111140e+00 | Exact Synthesis (Zero Error) |
-| Prob 9: Structured Unitary 2 | 65030 | 1.866841e+00 | Best-of-N Solovay-Kitaev |
+| Prob 9: Structured Unitary 2 | 53312 | 1.851273e+00 | Best-of-N Solovay-Kitaev |
 | Prob 10: Random Unitary | 105431 | 1.967564e+00 | Best-of-N Solovay-Kitaev |
 | Prob 11: Diagonal Unitary | 25 | 0.000000e+00 | Exact Synthesis (Zero Error) |
 

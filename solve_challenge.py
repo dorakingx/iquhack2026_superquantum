@@ -360,8 +360,23 @@ class UnitarySolver(ChallengeSolver):
         """
         from qiskit.circuit.library import QFT
         
-        # Create QFT circuit
-        qft_circuit = QFT(num_qubits)
+        # Try both with and without SWAP gates to find the correct configuration
+        qft_with_swaps = QFT(num_qubits, do_swaps=True)
+        qft_without_swaps = QFT(num_qubits, do_swaps=False)
+        
+        # Decompose both to get accurate distance comparison
+        decomposed_with = qft_with_swaps.decompose(reps=2)
+        decomposed_without = qft_without_swaps.decompose(reps=2)
+        
+        # Calculate distances for both against target unitary
+        dist_with = operator_norm_distance(self.target_unitary, decomposed_with, optimize_phase=True)
+        dist_without = operator_norm_distance(self.target_unitary, decomposed_without, optimize_phase=True)
+        
+        # Select the one with lower distance
+        if dist_with < dist_without:
+            qft_circuit = qft_with_swaps
+        else:
+            qft_circuit = qft_without_swaps
         
         # Decompose and transpile to target basis
         # QFT contains CP gates which transpile well to T gates
@@ -637,7 +652,15 @@ class StatePrepSolver(UnitarySolver):
     Inherits from UnitarySolver to reuse decomposition and synthesis logic.
     """
     
-    def __init__(self, seed, problem_name):
+    def __init__(self, seed, problem_name, recursion_degree=3):
+        """
+        Initialize StatePrepSolver with a seed.
+        
+        Args:
+            seed (int): Random seed for statevector generation
+            problem_name (str): Name/description of the problem
+            recursion_degree (int): Recursion degree for SolovayKitaev (default 3 for better accuracy)
+        """
         from qiskit.quantum_info import random_statevector
         
         # Generate target statevector
@@ -669,8 +692,8 @@ class StatePrepSolver(UnitarySolver):
         phase_diff = np.angle(np.vdot(psi, Q_mat[:, 0]))
         Q_mat[:, 0] = Q_mat[:, 0] * np.exp(-1j * phase_diff)
         
-        # Initialize parent UnitarySolver
-        super().__init__(Q_mat, problem_name)
+        # Initialize parent UnitarySolver with recursion_degree
+        super().__init__(Q_mat, problem_name, recursion_degree=recursion_degree)
         
         # EXPLICITLY call synthesize to ensure circuit is created
         self.synthesize()
@@ -1082,11 +1105,12 @@ class HamiltonianSolver(ChallengeSolver):
         if len(active_qubits) > 1:
             self._apply_cnot_ladder(circuit, active_qubits, reverse=False)
         
-        # Step 3: Apply Rz(2*angle) on last active qubit
-        # This is the only non-Clifford gate (unless angle is special)
-        # Use exact synthesis if 2*angle is multiple of π/4, else approximate
+        # Step 3: Apply Rz(-2*angle) on last active qubit
+        # We want exp(i * angle * Z), but Rz(λ) = exp(-i * λ/2 * Z)
+        # So we need Rz(-2*angle) to get exp(i * angle * Z)
+        # Use exact synthesis if -2*angle is multiple of π/4, else approximate
         last_qubit = active_qubits[-1]
-        rz_approximation = self._synthesize_rz(angle)
+        rz_approximation = self._synthesize_rz(-angle)  # Changed from angle to -angle
         
         # Insert the Rz approximation circuit on the last qubit
         # The rz_approximation is a single-qubit circuit, so we map qubit 0 to last_qubit
@@ -1603,9 +1627,9 @@ def main():
         ("Problem 4: exp(i*π/7 * (XX+YY))", None, HamiltonianSolver, create_hamiltonian_config_4()),
         ("Problem 5: exp(i*π/7 * (XX+YY+ZZ))", None, HamiltonianSolver, create_hamiltonian_config_5()),
         ("Problem 6: exp(i*π/7 * (XX+ZI+IZ))", None, HamiltonianSolver, create_hamiltonian_config_6()),
-        ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42}),
+        ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42, 'recursion_degree': 3}),
         ("Problem 8: Structured Unitary 1", create_problem_8_unitary(), UnitarySolver, None),
-        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, None),
+        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, {'recursion_degree': 3}),
         ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 3}),
         ("Problem 11: Diagonal Unitary", None, DiagonalSolver, {'phases': phases_11}),
     ]
@@ -1637,7 +1661,8 @@ def main():
             if solver_class == HamiltonianSolver:
                 solver = solver_class(extra_config, problem_name)
             elif solver_class == StatePrepSolver:
-                solver = solver_class(extra_config['seed'], problem_name)
+                recursion_degree = extra_config.get('recursion_degree', 3) if extra_config else 3
+                solver = solver_class(extra_config['seed'], problem_name, recursion_degree=recursion_degree)
             elif solver_class == DiagonalSolver:
                 solver = solver_class(extra_config['phases'], problem_name)
             else:
@@ -1724,7 +1749,8 @@ def main():
             if solver_class == HamiltonianSolver:
                 solver = solver_class(extra_config, problem_name)
             elif solver_class == StatePrepSolver:
-                solver = solver_class(extra_config['seed'], problem_name)
+                recursion_degree = extra_config.get('recursion_degree', 3) if extra_config else 3
+                solver = solver_class(extra_config['seed'], problem_name, recursion_degree=recursion_degree)
             elif solver_class == DiagonalSolver:
                 solver = solver_class(extra_config['phases'], problem_name)
             else:
