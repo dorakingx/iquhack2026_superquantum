@@ -19,6 +19,7 @@ The Superquantum challenge focuses on quantum circuit compilation with the follo
 - **Class-based Architecture**: Flexible solver framework supporting different problem types
 - **Exact Synthesis**: Optimized exact synthesis for special cases (multiples of π/4, QFT, Clifford gates)
 - **Qiskit Integration**: Uses Qiskit's transpilation, optimization tools, and Solovay-Kitaev decomposition
+- **Adaptive Optimization**: Adaptive Trotterization and best-of-N compilation for competitive performance
 
 ## Installation
 
@@ -197,19 +198,22 @@ Implements a class-based synthesis pipeline:
 - **`UnitarySolver`**: For direct unitary matrix synthesis
   - Exact Clifford decomposition for Clifford gates
   - QFT recognition for Problem 9 (Structured Unitary 2)
-  - Solovay-Kitaev synthesis for non-Clifford gates
+  - Solovay-Kitaev synthesis for non-Clifford gates with best-of-N compilation (3 attempts)
   - Supports recursion degree configuration
+  - Problem 8 placeholder verification
 
 - **`HamiltonianSolver`**: For Hamiltonian exponential synthesis
   - Pauli gadget decomposition
   - Exact synthesis for multiples of π/4 (via `_synthesize_rz`)
   - Solovay-Kitaev approximation for other angles
-  - Trotterization for non-commuting terms
+  - Adaptive Trotterization for Problem 6 (iterative step search until distance < 0.03)
+  - Ensures minimum T-count while maintaining accuracy
 
 - **`StatePrepSolver`**: For state preparation problems
+  - Inherits from `UnitarySolver` to reuse synthesis logic
   - Generates statevector from seed
-  - Constructs unitary that maps |00⟩ to target state
-  - Uses UnitarySolver synthesis logic
+  - Constructs unitary that maps |00⟩ to target state using QR decomposition
+  - Automatically uses best-of-N compilation and other optimizations
 
 - **`DiagonalSolver`**: For diagonal unitary synthesis
   - Exact phase-to-gate mapping for multiples of π/4
@@ -245,8 +249,9 @@ Implements a class-based synthesis pipeline:
 
 - **Problem 6: exp(i*π/7 * (XX+ZI+IZ))**
   - Target: Non-commuting Pauli terms
-  - Solver: `HamiltonianSolver` with Trotterization
-  - T-count: ~156,288
+  - Solver: `HamiltonianSolver` with adaptive Trotterization
+  - Optimization: Iteratively searches for minimum Trotter steps (distance < 0.03 threshold)
+  - T-count: Variable (optimized based on accuracy requirement)
 
 - **Problem 7: State Preparation**
   - Target: Unitary that maps |00⟩ to random statevector (seed=42)
@@ -254,9 +259,9 @@ Implements a class-based synthesis pipeline:
   - T-count: ~103,931
 
 - **Problem 8: Structured Unitary 1**
-  - Target: Placeholder (identity matrix)
-  - Solver: `UnitarySolver`
-  - T-count: 0
+  - Target: Placeholder (identity matrix) - **WARNING: Update with actual matrix from PDF**
+  - Solver: `UnitarySolver` with placeholder verification
+  - T-count: 0 (placeholder)
 
 - **Problem 9: Structured Unitary 2**
   - Target: Quantum Fourier Transform (QFT) on 2 qubits
@@ -265,8 +270,9 @@ Implements a class-based synthesis pipeline:
 
 - **Problem 10: Random Unitary**
   - Target: Random 4×4 unitary (seed=42)
-  - Solver: `UnitarySolver` with Solovay-Kitaev (recursion_degree=3)
-  - T-count: ~105,431
+  - Solver: `UnitarySolver` with Solovay-Kitaev (recursion_degree=3) and best-of-N compilation
+  - Optimization: Tries 3 different optimization levels, selects best T-count
+  - T-count: ~105,431 (optimized)
 
 - **Problem 11: Diagonal Unitary**
   - Target: Diagonal unitary with phases that are multiples of π/4
@@ -288,6 +294,23 @@ Implements a class-based synthesis pipeline:
 ### Exact Clifford Decomposition
 - Clifford unitaries are decomposed exactly without approximation
 - Used for Problem 1 (Controlled-Y)
+
+### Best-of-N Compilation
+- **All Solovay-Kitaev synthesis cases** now use best-of-N compilation
+- Tries 3 different optimization levels (1, 2, 3) and selects the circuit with lowest T-count
+- Applied to Problems 2, 7, 8, 10, and any other non-Clifford unitaries
+- Ensures competitive T-count performance
+
+### Adaptive Trotterization
+- **Problem 6** uses adaptive Trotterization instead of fixed steps
+- Iteratively searches for minimum Trotter steps (starting from 1, up to 10)
+- Stops when operator norm distance < 0.03 threshold
+- Ensures minimum T-count while maintaining required accuracy
+
+### Final Gate Conversion
+- `convert_s_z_to_t` is applied as the absolute final step in all optimization paths
+- Ensures S/Z gates introduced by optimization passes are converted back to T gates
+- Guarantees strict adherence to `{H, T, T_dag, CNOT}` basis
 
 ## Dependencies
 
