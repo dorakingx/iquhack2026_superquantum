@@ -274,6 +274,18 @@ class UnitarySolver(ChallengeSolver):
     - Solovay-Kitaev synthesis for non-Clifford gates
     """
     
+    def __init__(self, target_unitary, problem_name, recursion_degree=2):
+        """
+        Initialize UnitarySolver.
+        
+        Args:
+            target_unitary (np.ndarray): Target unitary matrix
+            problem_name (str): Name/description of the problem
+            recursion_degree (int): Recursion degree for SolovayKitaev (default 2)
+        """
+        super().__init__(target_unitary, problem_name)
+        self.recursion_degree = recursion_degree
+    
     def synthesize(self):
         """
         Synthesize a unitary matrix into a Clifford+T circuit.
@@ -404,8 +416,8 @@ class UnitarySolver(ChallengeSolver):
             unrolled = clean_circuit
         
         # Apply Solovay-Kitaev explicitly
-        # Initialize SolovayKitaev with recursion_degree=2 (can be increased for better approximation)
-        skd = SolovayKitaev(recursion_degree=2)
+        # Initialize SolovayKitaev with recursion_degree (default 2, can be increased for better approximation)
+        skd = SolovayKitaev(recursion_degree=self.recursion_degree)
         
         # Create PassManager with SolovayKitaev
         # First ensure all gates are in ['u3', 'cx'] basis
@@ -524,6 +536,457 @@ class UnitarySolver(ChallengeSolver):
                         del last_gates[q]
             
             # Add the gate
+            new_circuit.append(gate, qubits)
+        
+        return new_circuit
+
+
+class StatePrepSolver(ChallengeSolver):
+    """
+    Solver for state preparation problems.
+    
+    Used for Problem 7 where we need to design a unitary that maps |00⟩ to a target statevector.
+    Uses Initialize to extract the unitary, then delegates to UnitarySolver logic.
+    """
+    
+    def __init__(self, seed, problem_name):
+        """
+        Initialize StatePrepSolver with a seed for random statevector generation.
+        
+        Args:
+            seed (int): Random seed for generating target statevector
+            problem_name (str): Name/description of the problem
+        """
+        from qiskit.quantum_info import random_statevector
+        
+        # Generate target statevector
+        self.target_statevector = random_statevector(4, seed=seed)
+        
+        # Construct unitary that maps |00⟩ to target statevector
+        # We need a unitary U such that U|00⟩ = |ψ⟩
+        # Use QR decomposition: start with |ψ⟩ as first column, complete basis
+        
+        psi = self.target_statevector.data
+        
+        # Create a matrix with |ψ⟩ as first column
+        basis_matrix = np.zeros((4, 4), dtype=complex)
+        basis_matrix[:, 0] = psi
+        
+        # Complete the basis with orthogonal vectors
+        # Use Gram-Schmidt: start with standard basis vectors
+        standard_basis = np.eye(4, dtype=complex)
+        
+        # Project out |ψ⟩ component from each standard basis vector
+        for i in range(1, 4):
+            v = standard_basis[:, i]
+            # Project out components already in basis
+            for j in range(i):
+                v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
+            # Normalize
+            norm = np.linalg.norm(v)
+            if norm > 1e-10:
+                basis_matrix[:, i] = v / norm
+            else:
+                # If vector is too small, use next standard basis vector
+                # and project out |ψ⟩
+                v = standard_basis[:, (i + 1) % 4]
+                v = v - np.vdot(psi, v) * psi
+                norm = np.linalg.norm(v)
+                if norm > 1e-10:
+                    basis_matrix[:, i] = v / norm
+                else:
+                    # Fallback: use random vector
+                    v = np.random.randn(4) + 1j * np.random.randn(4)
+                    for j in range(i):
+                        v = v - np.vdot(basis_matrix[:, j], v) * basis_matrix[:, j]
+                    norm = np.linalg.norm(v)
+                    if norm > 1e-10:
+                        basis_matrix[:, i] = v / norm
+        
+        # Ensure orthonormality using QR decomposition
+        Q, R = np.linalg.qr(basis_matrix)
+        
+        # Ensure first column matches |ψ⟩ (up to global phase)
+        # Adjust phase
+        phase_diff = np.angle(np.vdot(psi, Q[:, 0]))
+        Q[:, 0] = Q[:, 0] * np.exp(-1j * phase_diff)
+        
+        # Verify first column matches
+        if not np.allclose(Q[:, 0], psi, atol=1e-10):
+            # If not matching, try adjusting the entire matrix
+            # Find the column closest to |ψ⟩
+            overlaps = [abs(np.vdot(psi, Q[:, i])) for i in range(4)]
+            best_col = np.argmax(overlaps)
+            if best_col != 0:
+                # Swap columns
+                Q[:, [0, best_col]] = Q[:, [best_col, 0]]
+        
+        target_unitary = Q
+        
+        # Initialize base class with extracted unitary
+        super().__init__(target_unitary, problem_name)
+        
+        # Store seed for reference
+        self.seed = seed
+    
+    def synthesize(self):
+        """
+        Synthesize the state preparation unitary into a Clifford+T circuit.
+        
+        Delegates to UnitarySolver synthesis logic.
+        """
+        # Determine number of qubits from unitary dimension
+        dim = self.target_unitary.shape[0]
+        num_qubits = int(np.log2(dim))
+        
+        if 2**num_qubits != dim:
+            raise ValueError(f"Unitary dimension {dim} is not a power of 2")
+        
+        # Check if unitary is Clifford
+        is_clifford = is_clifford_unitary(self.target_unitary)
+        
+        if is_clifford:
+            # Use exact Clifford decomposition
+            circuit = self._synthesize_clifford_exact(num_qubits)
+        else:
+            # Use Solovay-Kitaev synthesis
+            circuit = self._synthesize_solovay_kitaev(num_qubits)
+        
+        self.circuit = circuit
+    
+    def _synthesize_clifford_exact(self, num_qubits):
+        """Synthesize Clifford unitary using exact decomposition."""
+        circuit = decompose_clifford_exact(self.target_unitary, num_qubits)
+        optimized = self._optimize_circuit(circuit)
+        return optimized
+    
+    def _synthesize_solovay_kitaev(self, num_qubits):
+        """Synthesize non-Clifford unitary using Solovay-Kitaev decomposition."""
+        # Create circuit with the unitary
+        circuit = QuantumCircuit(num_qubits)
+        circuit.unitary(self.target_unitary, range(num_qubits), label='target')
+        
+        # Decompose the circuit completely
+        decomposed = circuit.decompose(reps=4)
+        
+        # Check if there are any unitary gates remaining
+        has_unitary = any(inst.operation.name == 'unitary' for inst in decomposed.data)
+        
+        if has_unitary:
+            # Force decomposition by transpiling to a basis that doesn't include unitary
+            unrolled = transpile(
+                decomposed,
+                basis_gates=['u3', 'cx'],
+                optimization_level=0
+            )
+            # Decompose again
+            unrolled = unrolled.decompose(reps=3)
+            # Check again
+            has_unitary = any(inst.operation.name == 'unitary' for inst in unrolled.data)
+            if has_unitary:
+                # Still has unitary gates - force remove them
+                new_circuit = QuantumCircuit(num_qubits)
+                for inst in unrolled.data:
+                    if inst.operation.name != 'unitary':
+                        qubits = [unrolled.find_bit(q)[0] for q in inst.qubits]
+                        new_circuit.append(inst.operation, qubits)
+                unrolled = new_circuit
+        else:
+            # Already decomposed, just transpile to u3 and cx
+            unrolled = transpile(
+                decomposed,
+                basis_gates=['u3', 'cx'],
+                optimization_level=0
+            )
+        
+        # Final check: ensure no unitary gates before SolovayKitaev
+        final_check = any(inst.operation.name == 'unitary' for inst in unrolled.data)
+        if final_check:
+            # Remove unitary gates completely
+            clean_circuit = QuantumCircuit(num_qubits)
+            for inst in unrolled.data:
+                if inst.operation.name != 'unitary':
+                    qubits = [unrolled.find_bit(q)[0] for q in inst.qubits]
+                    clean_circuit.append(inst.operation, qubits)
+            unrolled = clean_circuit
+        
+        # Apply Solovay-Kitaev explicitly
+        skd = SolovayKitaev(recursion_degree=2)
+        
+        # Create PassManager with SolovayKitaev
+        pm = PassManager([
+            UnrollCustomDefinitions(standard_gates, ['u3', 'cx']),
+            skd,
+        ])
+        
+        # Run the pass manager to apply SolovayKitaev
+        try:
+            sk_circuit = pm.run(unrolled)
+        except Exception as e:
+            # Fallback: if SolovayKitaev fails, use standard transpile
+            print(f"  Warning: SolovayKitaev pass failed ({str(e)[:50]}...), using standard transpile")
+            sk_circuit = transpile(
+                unrolled,
+                basis_gates=['h', 't', 'tdg', 'cx'],
+                optimization_level=2
+            )
+        
+        # Translate to target basis ['h', 't', 'tdg', 'cx']
+        sk_circuit = transpile(
+            sk_circuit,
+            basis_gates=['h', 't', 'tdg', 'cx'],
+            optimization_level=1
+        )
+        
+        # Convert any S/Z gates that might remain
+        sk_circuit = convert_s_z_to_t(sk_circuit)
+        
+        # Final optimization
+        optimized = self._optimize_circuit(sk_circuit)
+        
+        return optimized
+    
+    def _optimize_circuit(self, circuit):
+        """Apply optimization passes to reduce gate count."""
+        opt_pm = PassManager([
+            Optimize1qGates(),
+            InverseCancellation(),
+            CommutativeCancellation(),
+            CommutationAnalysis(),
+        ])
+        
+        optimized = opt_pm.run(circuit)
+        
+        # Manual optimization: cancel T·Tdg pairs
+        optimized = self._cancel_t_pairs(optimized)
+        
+        # Final transpile to ensure correct basis
+        final = transpile(
+            optimized,
+            basis_gates=['h', 't', 'tdg', 'cx'],
+            optimization_level=1
+        )
+        
+        return final
+    
+    def _cancel_t_pairs(self, circuit):
+        """Cancel adjacent T·Tdg and Tdg·T pairs."""
+        new_circuit = QuantumCircuit(circuit.num_qubits)
+        last_gates = {}
+        
+        for instruction in circuit.data:
+            gate = instruction.operation
+            if hasattr(instruction.qubits[0], 'index'):
+                qubits = [q.index for q in instruction.qubits]
+            else:
+                qubits = [circuit.find_bit(q)[0] for q in instruction.qubits]
+            gate_name = gate.name
+            
+            if len(qubits) == 1:
+                q = qubits[0]
+                if q in last_gates:
+                    last_gate = last_gates[q]
+                    if (last_gate == 't' and gate_name == 'tdg') or \
+                       (last_gate == 'tdg' and gate_name == 't'):
+                        del last_gates[q]
+                        continue
+                
+                if gate_name in ['t', 'tdg']:
+                    last_gates[q] = gate_name
+                else:
+                    if q in last_gates:
+                        del last_gates[q]
+            
+            new_circuit.append(gate, qubits)
+        
+        return new_circuit
+
+
+class DiagonalSolver(ChallengeSolver):
+    """
+    Solver for diagonal unitary synthesis with exact phase-to-gate mapping.
+    
+    Used for Problem 11 where we have a diagonal unitary with phases that are
+    multiples of π/4. This allows exact synthesis without approximation.
+    """
+    
+    def __init__(self, phases, problem_name):
+        """
+        Initialize DiagonalSolver with phase array.
+        
+        Args:
+            phases (list): List of 16 phase values (for 4 qubits) in order 0000 to 1111
+            problem_name (str): Name/description of the problem
+        """
+        # Create diagonal unitary: diag([exp(i*phi) for phi in phases])
+        diagonal_elements = [np.exp(1j * phi) for phi in phases]
+        target_unitary = np.diag(diagonal_elements)
+        
+        # Initialize base class
+        super().__init__(target_unitary, problem_name)
+        
+        # Store phases for reference
+        self.phases = phases
+    
+    def _map_rz_to_clifford_t(self, angle):
+        """
+        Map Rz(angle) gate to exact T/S/Z gate sequence when angle is a multiple of π/4.
+        
+        Args:
+            angle (float): Rotation angle (should be multiple of π/4)
+        
+        Returns:
+            list: List of gate names (strings) representing the exact decomposition
+                  e.g., ['t'], ['s'], ['z'], ['s', 'tdg'], etc.
+        """
+        # Normalize angle to [0, 2π)
+        angle = angle % (2 * np.pi)
+        
+        # Map to nearest π/4 multiple
+        # Round to nearest multiple of π/4
+        k = round(angle / (np.pi / 4)) % 8
+        
+        # Map k to gate sequence
+        # k=0: Rz(0) = Identity → []
+        # k=1: Rz(π/4) = T → ['t']
+        # k=2: Rz(π/2) = S → ['s']
+        # k=3: Rz(3π/4) = S·Tdg → ['s', 'tdg']
+        # k=4: Rz(π) = Z → ['z']
+        # k=5: Rz(5π/4) = Z·T → ['z', 't']
+        # k=6: Rz(3π/2) = Z·S → ['z', 's']
+        # k=7: Rz(7π/4) = Z·S·Tdg → ['z', 's', 'tdg']
+        
+        gate_map = {
+            0: [],
+            1: ['t'],
+            2: ['s'],
+            3: ['s', 'tdg'],
+            4: ['z'],
+            5: ['z', 't'],
+            6: ['z', 's'],
+            7: ['z', 's', 'tdg']
+        }
+        
+        return gate_map.get(k, [])
+    
+    def synthesize(self):
+        """
+        Synthesize diagonal unitary using exact decomposition.
+        
+        Uses qiskit.circuit.library.DiagonalGate to decompose, then replaces
+        each Rz gate with exact T/S/Z mapping.
+        """
+        from qiskit.circuit.library import DiagonalGate
+        
+        # Determine number of qubits from phases length
+        num_qubits = int(np.log2(len(self.phases)))
+        
+        # Convert phases to diagonal elements (complex numbers with abs=1)
+        diagonal_elements = [np.exp(1j * phi) for phi in self.phases]
+        
+        # Create diagonal circuit using DiagonalGate
+        diagonal_circuit = QuantumCircuit(num_qubits)
+        diagonal_circuit.append(DiagonalGate(diagonal_elements), range(num_qubits))
+        
+        # Decompose the diagonal gate
+        # This will break it down into CNOTs and Rz gates
+        decomposed = diagonal_circuit.decompose(reps=3)
+        
+        # Create new circuit and replace Rz gates with exact T/S/Z gates
+        new_circuit = QuantumCircuit(num_qubits)
+        
+        for instruction in decomposed.data:
+            gate = instruction.operation
+            # Get qubit indices
+            if hasattr(instruction.qubits[0], 'index'):
+                qubits = [q.index for q in instruction.qubits]
+            else:
+                qubits = [decomposed.find_bit(q)[0] for q in instruction.qubits]
+            
+            gate_name = gate.name
+            
+            if gate_name == 'rz':
+                # Extract angle from Rz gate
+                angle = float(gate.params[0])
+                
+                # Map to exact T/S/Z gates
+                gate_sequence = self._map_rz_to_clifford_t(angle)
+                
+                # Apply gates in sequence
+                for g in gate_sequence:
+                    if g == 't':
+                        new_circuit.t(qubits[0])
+                    elif g == 'tdg':
+                        new_circuit.tdg(qubits[0])
+                    elif g == 's':
+                        new_circuit.s(qubits[0])
+                    elif g == 'sdg':
+                        new_circuit.sdg(qubits[0])
+                    elif g == 'z':
+                        new_circuit.z(qubits[0])
+            else:
+                # Copy other gates as-is (CNOTs, etc.)
+                new_circuit.append(gate, qubits)
+        
+        # Convert S/Z gates to T gates (S = T^2, Z = T^4)
+        circuit_with_t = convert_s_z_to_t(new_circuit)
+        
+        # Apply optimization
+        optimized = self._optimize_circuit(circuit_with_t)
+        
+        self.circuit = optimized
+    
+    def _optimize_circuit(self, circuit):
+        """Apply optimization passes to reduce gate count."""
+        opt_pm = PassManager([
+            Optimize1qGates(),
+            InverseCancellation(),
+            CommutativeCancellation(),
+            CommutationAnalysis(),
+        ])
+        
+        optimized = opt_pm.run(circuit)
+        
+        # Manual optimization: cancel T·Tdg pairs
+        optimized = self._cancel_t_pairs(optimized)
+        
+        # Final transpile to ensure correct basis
+        final = transpile(
+            optimized,
+            basis_gates=['h', 't', 'tdg', 'cx'],
+            optimization_level=1
+        )
+        
+        return final
+    
+    def _cancel_t_pairs(self, circuit):
+        """Cancel adjacent T·Tdg and Tdg·T pairs."""
+        new_circuit = QuantumCircuit(circuit.num_qubits)
+        last_gates = {}
+        
+        for instruction in circuit.data:
+            gate = instruction.operation
+            if hasattr(instruction.qubits[0], 'index'):
+                qubits = [q.index for q in instruction.qubits]
+            else:
+                qubits = [circuit.find_bit(q)[0] for q in instruction.qubits]
+            gate_name = gate.name
+            
+            if len(qubits) == 1:
+                q = qubits[0]
+                if q in last_gates:
+                    last_gate = last_gates[q]
+                    if (last_gate == 't' and gate_name == 'tdg') or \
+                       (last_gate == 'tdg' and gate_name == 't'):
+                        del last_gates[q]
+                        continue
+                
+                if gate_name in ['t', 'tdg']:
+                    last_gates[q] = gate_name
+                else:
+                    if q in last_gates:
+                        del last_gates[q]
+            
             new_circuit.append(gate, qubits)
         
         return new_circuit
@@ -981,13 +1444,80 @@ def create_hamiltonian_config_6():
     }
 
 
+def create_problem_8_unitary():
+    """
+    Create unitary matrix for Problem 8 (Structured Unitary 1).
+    
+    Currently a placeholder (identity matrix). User will provide actual matrix later.
+    
+    Returns:
+        np.ndarray: 4×4 complex matrix (placeholder)
+    """
+    return np.eye(4, dtype=complex)
+
+
+def create_problem_9_unitary():
+    """
+    Create unitary matrix for Problem 9 (Structured Unitary 2).
+    
+    Matrix from challenge documentation:
+    0.5 * [[1,1,1,1], [1,i,-1,-i], [1,-1,1,-1], [1,-i,-1,i]]
+    
+    Returns:
+        np.ndarray: 4×4 complex matrix
+    """
+    return 0.5 * np.array([
+        [1, 1, 1, 1],
+        [1, 1j, -1, -1j],
+        [1, -1, 1, -1],
+        [1, -1j, -1, 1j]
+    ], dtype=complex)
+
+
+def create_problem_10_unitary():
+    """
+    Create random unitary matrix for Problem 10.
+    
+    Uses qiskit.quantum_info.random_unitary with seed=42.
+    
+    Returns:
+        np.ndarray: 4×4 complex matrix
+    """
+    from qiskit.quantum_info import random_unitary
+    return random_unitary(4, seed=42).data
+
+
 def main():
     """
-    Main execution: solve Problems 1-6.
+    Main execution: solve Problems 1-11.
     """
+    # Phases for Problem 11 (Diagonal Unitary) derived from iQuHACK 2026 PDF
+    # Inputs 0000 to 1111 in order
+    phases_11 = [
+        0,              # 0000
+        np.pi,          # 0001
+        5 * np.pi / 4,  # 0010
+        7 * np.pi / 4,  # 0011
+        5 * np.pi / 4,  # 0100
+        7 * np.pi / 4,  # 0101
+        3 * np.pi / 2,  # 0110
+        3 * np.pi / 2,  # 0111
+        5 * np.pi / 4,  # 1000
+        7 * np.pi / 4,  # 1001
+        3 * np.pi / 2,  # 1010
+        3 * np.pi / 2,  # 1011
+        3 * np.pi / 2,  # 1100
+        3 * np.pi / 2,  # 1101
+        7 * np.pi / 4,  # 1110
+        5 * np.pi / 4   # 1111
+    ]
+    
     # Define problems
-    # For UnitarySolver: (problem_name, target_unitary, solver_class)
-    # For HamiltonianSolver: (problem_name, hamiltonian_config, solver_class)
+    # Format: (problem_name, target_unitary/config, solver_class, extra_config)
+    # For UnitarySolver: target_unitary is matrix, extra_config can be {'recursion_degree': N}
+    # For HamiltonianSolver: target_unitary is None, extra_config is hamiltonian_config dict
+    # For StatePrepSolver: target_unitary is None, extra_config is {'seed': N}
+    # For DiagonalSolver: target_unitary is None, extra_config is {'phases': [...]}
     problems = [
         ("Problem 1: Controlled-Y", create_controlled_y(), UnitarySolver, None),
         ("Problem 2: Controlled-Ry(π/7)", create_controlled_ry(np.pi / 7), UnitarySolver, None),
@@ -995,6 +1525,11 @@ def main():
         ("Problem 4: exp(i*π/7 * (XX+YY))", None, HamiltonianSolver, create_hamiltonian_config_4()),
         ("Problem 5: exp(i*π/7 * (XX+YY+ZZ))", None, HamiltonianSolver, create_hamiltonian_config_5()),
         ("Problem 6: exp(i*π/7 * (XX+ZI+IZ))", None, HamiltonianSolver, create_hamiltonian_config_6()),
+        ("Problem 7: State Preparation", None, StatePrepSolver, {'seed': 42}),
+        ("Problem 8: Structured Unitary 1", create_problem_8_unitary(), UnitarySolver, None),
+        ("Problem 9: Structured Unitary 2", create_problem_9_unitary(), UnitarySolver, None),
+        ("Problem 10: Random Unitary", create_problem_10_unitary(), UnitarySolver, {'recursion_degree': 3}),
+        ("Problem 11: Diagonal Unitary", None, DiagonalSolver, {'phases': phases_11}),
     ]
     
     print("=" * 60)
@@ -1004,16 +1539,22 @@ def main():
     
     results_summary = []
     
-    for problem_name, target_unitary, solver_class, hamiltonian_config in problems:
+    for problem_name, target_unitary, solver_class, extra_config in problems:
         print(f"Solving {problem_name}...")
         print("-" * 60)
         
         try:
             # Create solver based on type
             if solver_class == HamiltonianSolver:
-                solver = solver_class(hamiltonian_config, problem_name)
+                solver = solver_class(extra_config, problem_name)
+            elif solver_class == StatePrepSolver:
+                solver = solver_class(extra_config['seed'], problem_name)
+            elif solver_class == DiagonalSolver:
+                solver = solver_class(extra_config['phases'], problem_name)
             else:
-                solver = solver_class(target_unitary, problem_name)
+                # UnitarySolver
+                recursion_degree = extra_config.get('recursion_degree', 2) if extra_config else 2
+                solver = solver_class(target_unitary, problem_name, recursion_degree=recursion_degree)
             
             results = solver.solve()
             
@@ -1080,13 +1621,19 @@ def main():
     
     # Save OpenQASM files for each problem
     print("\nSaving OpenQASM circuits...")
-    for problem_name, target_unitary, solver_class, hamiltonian_config in problems:
+    for problem_name, target_unitary, solver_class, extra_config in problems:
         try:
             # Create solver based on type
             if solver_class == HamiltonianSolver:
-                solver = solver_class(hamiltonian_config, problem_name)
+                solver = solver_class(extra_config, problem_name)
+            elif solver_class == StatePrepSolver:
+                solver = solver_class(extra_config['seed'], problem_name)
+            elif solver_class == DiagonalSolver:
+                solver = solver_class(extra_config['phases'], problem_name)
             else:
-                solver = solver_class(target_unitary, problem_name)
+                # UnitarySolver
+                recursion_degree = extra_config.get('recursion_degree', 2) if extra_config else 2
+                solver = solver_class(target_unitary, problem_name, recursion_degree=recursion_degree)
             
             # Ensure circuit is synthesized
             if solver.circuit is None:
