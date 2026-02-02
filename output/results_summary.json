@@ -11,8 +11,8 @@
   },
   {
     "problem": "Problem 3: exp(i*\u03c0/7 * Z\u2297Z)",
-    "t_count": 13276,
-    "distance": 1.5660518893613182
+    "t_count": 13422,
+    "distance": 0.6575474327001586
   },
   {
     "problem": "Problem 4: exp(i*\u03c0/7 * (XX+YY))",
@@ -26,13 +26,12 @@
   },
   {
     "problem": "Problem 6: exp(i*\u03c0/7 * (XX+ZI+IZ))",
-    "t_count": 308096,
-    "distance": 0.16296619822781871
+    "t_count": 305792,
+    "distance": 0.1629592907309975
   },
   {
     "problem": "Problem 7: State Preparation",
-    "t_count": 103502,
-    "distance": 1.0464106843357392
+    "error": "maximum recursion depth exceeded"
   },
   {
     "problem": "Problem 8: Structured Unitary 1",
@@ -41,13 +40,11 @@
   },
   {
     "problem": "Problem 9: Structured Unitary 2",
-    "t_count": 63576,
-    "distance": 1.848023924064076
+    "error": "maximum recursion depth exceeded"
   },
   {
     "problem": "Problem 10: Random Unitary",
-    "t_count": 103453,
-    "distance": 1.9653684096516988
+    "error": "maximum recursion depth exceeded"
   },
   {
     "problem": "Problem 11: Diagonal Unitary",
